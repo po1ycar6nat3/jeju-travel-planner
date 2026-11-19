@@ -247,7 +247,6 @@ export default function PlannerWorkspace({
   const [searchResults, setSearchResults] = useState<CandidatePlace[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
-  // 필터 상태: 카테고리 다중 선택 (빈 배열 = 전체) & 별표(꼭 가고 싶은 곳) 필터 & 사용자 선택
   const [selectedCategories, setSelectedCategories] = useState<PlaceCategory[]>([]);
   const [onlyMustVisitFilter, setOnlyMustVisitFilter] = useState(false);
   const [selectedUserFilter, setSelectedUserFilter] = useState<string | null>(null);
@@ -270,7 +269,6 @@ export default function PlannerWorkspace({
 
   const visiblePlaces = places.filter((p) => !isMembersMetaPlace(p));
 
-  // 필터링된 장소 목록 (지도 마커 & 우측 일정 목록 공통 적용)
   const filteredPlaces = visiblePlaces.filter((place) => {
     const matchesCategory =
       selectedCategories.length === 0 ||
@@ -560,7 +558,6 @@ export default function PlannerWorkspace({
     };
   }, [mapInstance, handleMapClick]);
 
-  // 필터링된 장소 목록(filteredPlaces) 기준으로 지도 마커 렌더링 (+ 꼭 가고 싶은 곳 별표 표시)
   useEffect(() => {
     if (!mapInstance || !window.naver) return;
 
@@ -733,6 +730,22 @@ export default function PlannerWorkspace({
   const handlePickExistingUser = (name: string) => {
     setActiveUser(name);
     setShowUserGate(false);
+  };
+
+  // 사용자 삭제 (저장된 장소 및 저장했던 이름은 그대로 유지)
+  const handleDeleteUser = async (targetName: string) => {
+    const nextMembers = members.filter((m) => m !== targetName);
+    setMembers(nextMembers);
+    saveStoredMembers(currentPlanIdRef.current, nextMembers);
+
+    if (activeUser === targetName) {
+      setActiveUser(null);
+    }
+    if (selectedUserFilter === targetName) {
+      setSelectedUserFilter(null);
+    }
+
+    await persistPlanToDb(planTitle, visiblePlaces, nextMembers);
   };
 
   const handleSearch = async (e: React.FormEvent) => {
@@ -925,15 +938,27 @@ export default function PlannerWorkspace({
               ) : (
                 <div className="space-y-2 max-h-60 overflow-y-auto">
                   {members.map((name) => (
-                    <button
+                    <div
                       key={name}
-                      type="button"
-                      onClick={() => handlePickExistingUser(name)}
-                      className="w-full py-2.5 px-4 rounded-xl border border-gray-200 hover:border-emerald-500 hover:bg-emerald-50/50 text-left text-sm font-medium text-gray-900 flex items-center justify-between transition-colors cursor-pointer"
+                      className="w-full py-2 px-3.5 rounded-xl border border-gray-200 hover:border-emerald-500 hover:bg-emerald-50/50 text-sm font-medium text-gray-900 flex items-center justify-between gap-2 transition-colors"
                     >
-                      <span>{name}</span>
-                      <span className="text-xs text-emerald-700 font-semibold">선택 →</span>
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => handlePickExistingUser(name)}
+                        className="flex-1 text-left py-0.5 flex items-center justify-between cursor-pointer"
+                      >
+                        <span>{name}</span>
+                        <span className="text-xs text-emerald-700 font-semibold">선택 →</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteUser(name)}
+                        title={`${name} 삭제`}
+                        className="text-xs text-gray-400 hover:text-red-600 px-2 py-1 rounded hover:bg-red-50 transition-colors cursor-pointer shrink-0"
+                      >
+                        삭제
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}
@@ -1181,7 +1206,6 @@ export default function PlannerWorkspace({
                   />
                 </div>
 
-                {/* 꼭 가고 싶은 곳 선택 옵션 */}
                 <div className="flex items-center justify-between gap-2 pt-0.5">
                   <button
                     type="button"
@@ -1380,7 +1404,6 @@ export default function PlannerWorkspace({
               </div>
             </div>
 
-            {/* 카테고리 필터 바 (전체 / 식당 / 카페 / 관광 / 액티비티 / ⭐) */}
             <div className="mb-6 flex items-center gap-1.5 flex-wrap">
               <button
                 type="button"
@@ -1413,7 +1436,6 @@ export default function PlannerWorkspace({
                 );
               })}
 
-              {/* 맨 오른쪽 별표 이모지 필터 (꼭 가고 싶은 곳) */}
               <button
                 type="button"
                 onClick={() => setOnlyMustVisitFilter((prev) => !prev)}
@@ -1480,7 +1502,6 @@ export default function PlannerWorkspace({
                               <span>{cStyle.label}</span>
                             </button>
 
-                            {/* 카드 내 꼭 가고 싶은 곳 별표 토글 버튼 */}
                             <button
                               type="button"
                               onClick={(e) => {
