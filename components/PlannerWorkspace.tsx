@@ -25,8 +25,8 @@ export interface PlaceItem {
 
 export interface ScheduleSlotItem {
   id: string;
-  dayIndex: number;
-  timeSlot: string;
+  dayIndex: number; // 1부터 시작 (1일차, 2일차, ...)
+  timeSlot: string; // 예: "09:00", "10:00", ...
   placeId: number;
   title: string;
   memo?: string;
@@ -36,8 +36,8 @@ export interface ScheduleSlotItem {
 }
 
 export interface TripScheduleConfig {
-  startDateTime: string;
-  endDateTime: string;
+  startDateTime: string; // "YYYY-MM-DDTHH:mm"
+  endDateTime: string; // "YYYY-MM-DDTHH:mm"
   items: ScheduleSlotItem[];
 }
 
@@ -56,6 +56,12 @@ interface CandidatePlace {
   address: string;
   lat: number;
   lng: number;
+}
+
+interface MapViewportSnapshot {
+  lat: number;
+  lng: number;
+  zoom: number;
 }
 
 interface PlannerWorkspaceProps {
@@ -157,18 +163,21 @@ const TIME_SLOTS = [
 
 const FALLBACK_START_DT = "2026-11-22T09:00";
 const FALLBACK_END_DT = "2026-11-24T20:00";
-const MEMBERS_META_ID = -999999;
 
 function formatInputDateTimeLocal(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
-    date.getDate()
-  )}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const y = date.getFullYear();
+  const m = pad(date.getMonth() + 1);
+  const d = pad(date.getDate());
+  const h = pad(date.getHours());
+  const min = pad(date.getMinutes());
+  return `${y}-${m}-${d}T${h}:${min}`;
 }
 
 function getDefaultTripRange(): { startDateTime: string; endDateTime: string } {
-  const start = new Date();
-  start.setDate(start.getDate() + 1);
+  const now = new Date();
+  now.setMinutes(0, 0, 0);
+  const start = new Date(now.getTime() + 24 * 60 * 60 * 1000);
   start.setHours(9, 0, 0, 0);
   const end = new Date(start.getTime() + 2 * 24 * 60 * 60 * 1000);
   end.setHours(20, 0, 0, 0);
@@ -201,17 +210,18 @@ function computeTripDays(
 
   const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate());
   const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate());
-  const diffDays = Math.floor(
-    (endDay.getTime() - startDay.getTime()) / (24 * 60 * 60 * 1000)
+  const diffMs = endDay.getTime() - startDay.getTime();
+  const totalDays = Math.max(
+    1,
+    Math.min(30, Math.floor(diffMs / (24 * 60 * 60 * 1000)) + 1)
   );
-  const totalDays = Math.max(1, Math.min(30, diffDays + 1));
 
   return Array.from({ length: totalDays }, (_, idx) => {
     const d = new Date(startDay.getTime() + idx * 24 * 60 * 60 * 1000);
     return {
       dayIndex: idx + 1,
       dateLabel: `${d.getMonth() + 1}/${d.getDate()}`,
-      weekdayLabel: weekdays[d.getDay()] || "",
+      weekdayLabel: weekdays[d.getDay()],
     };
   });
 }
@@ -220,17 +230,22 @@ function formatDateTimeDisplay(dt?: string): string {
   if (!dt) return "";
   const parsed = new Date(dt);
   if (Number.isNaN(parsed.getTime())) return dt;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${parsed.getMonth() + 1}/${parsed.getDate()} ${pad(parsed.getHours())}:${pad(
-    parsed.getMinutes()
-  )}`;
+  const month = parsed.getMonth() + 1;
+  const day = parsed.getDate();
+  const hours = String(parsed.getHours()).padStart(2, "0");
+  const mins = String(parsed.getMinutes()).padStart(2, "0");
+  return `${month}/${day} ${hours}:${mins}`;
 }
 
 function inferCategoryType(rawCategory?: string, title?: string): PlaceCategory {
   const text = `${rawCategory || ""} ${title || ""}`.toLowerCase();
-  if (/카페|커피|디저트|베이커리|제과|마카롱|와플|빙수|tea|cafe|coffee/.test(text)) {
+
+  if (
+    /카페|커피|디저트|베이커리|제과|마카롱|와플|빙수|tea|cafe|coffee/.test(text)
+  ) {
     return "cafe";
   }
+
   if (
     /액티비티|레저|스포츠|체험|서핑|카약|패러글라이딩|승마|다이빙|스노클링|카트|짚라인|요트|낚시|수상/.test(
       text
@@ -238,6 +253,7 @@ function inferCategoryType(rawCategory?: string, title?: string): PlaceCategory 
   ) {
     return "activity";
   }
+
   if (
     /관광|명소|해수욕장|해변|오름|폭포|공원|전망대|박물관|미술관|수목원|유적|사찰|성당|일출봉|올레/.test(
       text
@@ -245,18 +261,29 @@ function inferCategoryType(rawCategory?: string, title?: string): PlaceCategory 
   ) {
     return "sightseeing";
   }
-  return "restaurant";
+
+  if (
+    /음식점|식당|맛집|고기|흑돼지|회|국수|해장국|치킨|피자|분식|일식|중식|양식|술집|포차|횟집|밥집/.test(
+      text
+    )
+  ) {
+    return "restaurant";
+  }
+
+  return "sightseeing";
 }
 
 function getPlaceCategory(place: {
   categoryType?: PlaceCategory;
-  title?: string;
+  title: string;
 }): PlaceCategory {
   if (place.categoryType && CATEGORY_STYLES[place.categoryType]) {
     return place.categoryType;
   }
-  return inferCategoryType(undefined, place.title || "");
+  return inferCategoryType(undefined, place.title);
 }
+
+const MEMBERS_META_ID = -999999;
 
 function isMembersMetaPlace(place: { id?: number; title?: string }): boolean {
   return place.id === MEMBERS_META_ID || place.title === "__MEMBERS__";
@@ -349,15 +376,17 @@ function parsePlanPayload(
   const directMembers = Array.isArray(rawMembers)
     ? rawMembers.filter((m): m is string => typeof m === "string" && Boolean(m.trim()))
     : [];
+
   const directDeleted = Array.isArray(rawDeletedMembers)
     ? rawDeletedMembers.filter((m): m is string => typeof m === "string" && Boolean(m.trim()))
     : [];
 
   const mergedDeleted = Array.from(new Set([...directDeleted, ...metaDeletedMembers]));
   const deletedSet = new Set(mergedDeleted);
-  const mergedMembers = Array.from(new Set([...directMembers, ...metaMembers])).filter(
-    (name) => !deletedSet.has(name)
-  );
+
+  const mergedMembers = Array.from(
+    new Set([...directMembers, ...metaMembers])
+  ).filter((name) => !deletedSet.has(name));
 
   return {
     parsedPlaces: realPlaces,
@@ -370,21 +399,52 @@ function parsePlanPayload(
 function buildNaverMapCoordUrl(title: string, lat: number, lng: number): string {
   const safeTitle = title.trim();
   if (safeTitle) {
-    return `https://map.naver.com/v5/search/${encodeURIComponent(
-      safeTitle
-    )}?c=${lng},${lat},16,0,0,0,dh`;
+    return `https://map.naver.com/v5/search/${encodeURIComponent(safeTitle)}?c=${lng},${lat},16,0,0,0,dh`;
   }
   return `https://map.naver.com/v5/?c=${lng},${lat},16,0,0,0,dh`;
 }
 
-function getKnownPlansKey(): string {
+function getMemberStorageKey(id?: string): string {
+  return `jeju_planner_members_${id || "default"}`;
+}
+
+function getDeletedMemberStorageKey(id?: string): string {
+  return `jeju_planner_deleted_members_${id || "default"}`;
+}
+
+function getKnownPlansStorageKey(): string {
   return "jeju_planner_known_plans_v1";
+}
+
+function getActivePlanStorageKey(): string {
+  return "jeju_planner_active_plan_id";
+}
+
+function loadStoredPlanId(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const val = window.localStorage.getItem(getActivePlanStorageKey());
+    return val && val.trim() ? val.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function saveStoredPlanId(id?: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (id && id.trim()) {
+      window.localStorage.setItem(getActivePlanStorageKey(), id.trim());
+    }
+  } catch {
+    // 무시
+  }
 }
 
 function loadKnownPlans(): PlanSummaryItem[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(getKnownPlansKey());
+    const raw = window.localStorage.getItem(getKnownPlansStorageKey());
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed)
@@ -398,30 +458,85 @@ function loadKnownPlans(): PlanSummaryItem[] {
   }
 }
 
-function saveKnownPlans(list: PlanSummaryItem[]): void {
+function upsertKnownPlan(summary: PlanSummaryItem): PlanSummaryItem[] {
+  const current = loadKnownPlans();
+  const next = [
+    summary,
+    ...current.filter((item) => item.id !== summary.id),
+  ];
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(getKnownPlansStorageKey(), JSON.stringify(next));
+    } catch {
+      // 무시
+    }
+  }
+  return next;
+}
+
+function removeKnownPlan(id: string): PlanSummaryItem[] {
+  const current = loadKnownPlans();
+  const next = current.filter((item) => item.id !== id);
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(getKnownPlansStorageKey(), JSON.stringify(next));
+    } catch {
+      // 무시
+    }
+  }
+  return next;
+}
+
+function loadStoredMembers(id?: string): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(getMemberStorageKey(id));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((v): v is string => typeof v === "string" && Boolean(v.trim()))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredMembers(id: string | undefined, list: string[]): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(getKnownPlansKey(), JSON.stringify(list));
+    window.localStorage.setItem(getMemberStorageKey(id), JSON.stringify(list));
   } catch {
     // 무시
   }
 }
 
-function upsertKnownPlan(summary: PlanSummaryItem): PlanSummaryItem[] {
-  const next = [summary, ...loadKnownPlans().filter((item) => item.id !== summary.id)];
-  saveKnownPlans(next);
-  return next;
+function loadStoredDeletedMembers(id?: string): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(getDeletedMemberStorageKey(id));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((v): v is string => typeof v === "string" && Boolean(v.trim()))
+      : [];
+  } catch {
+    return [];
+  }
 }
 
-function removeKnownPlan(id: string): PlanSummaryItem[] {
-  const next = loadKnownPlans().filter((item) => item.id !== id);
-  saveKnownPlans(next);
-  return next;
+function saveStoredDeletedMembers(id: string | undefined, list: string[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(getDeletedMemberStorageKey(id), JSON.stringify(list));
+  } catch {
+    // 무시
+  }
 }
 
 function mergeMembers(
   initialMembers: string[] = [],
   places: PlaceItem[] = [],
+  storedMembers: string[] = [],
   deletedMembers: string[] = []
 ): string[] {
   const deletedSet = new Set(deletedMembers.map((m) => m.trim()).filter(Boolean));
@@ -431,7 +546,11 @@ function mergeMembers(
     .filter((name): name is string => Boolean(name) && name !== "익명");
 
   return Array.from(
-    new Set([...initialMembers.map((m) => m.trim()).filter(Boolean), ...fromPlaces])
+    new Set([
+      ...initialMembers.map((m) => m.trim()).filter(Boolean),
+      ...storedMembers.map((m) => m.trim()).filter(Boolean),
+      ...fromPlaces,
+    ])
   ).filter((name) => !deletedSet.has(name));
 }
 
@@ -442,7 +561,15 @@ export default function PlannerWorkspace({
   initialMembers = [],
 }: PlannerWorkspaceProps) {
   const router = useRouter();
+  const initialPlanKey = planId || loadStoredPlanId();
+  const initialDeleted = loadStoredDeletedMembers(initialPlanKey);
+  const initialParsed = parsePlanPayload(
+    initialPlaces,
+    initialMembers,
+    initialDeleted
+  );
 
+  // 1단계: 여행 일정 선택 / 생성 게이트
   const [showPlanGate, setShowPlanGate] = useState<boolean>(() => !planId);
   const [planGateMode, setPlanGateMode] = useState<PlanGateMode>("choose");
   const [knownPlans, setKnownPlans] = useState<PlanSummaryItem[]>(() => loadKnownPlans());
@@ -451,33 +578,61 @@ export default function PlannerWorkspace({
   const [newEndDateTime, setNewEndDateTime] = useState(FALLBACK_END_DT);
   const [isCreatingPlan, setIsCreatingPlan] = useState(false);
 
-  const [currentPlanId, setCurrentPlanId] = useState<string | undefined>(planId);
+  // 클라이언트 마운트 시점에 실제 현재 기준 기본 날짜/시간 세팅
+  useEffect(() => {
+    const range = getDefaultTripRange();
+    setNewStartDateTime(range.startDateTime);
+    setNewEndDateTime(range.endDateTime);
+    setScheduleConfig((prev) => {
+      if (
+        prev.startDateTime === FALLBACK_START_DT &&
+        prev.endDateTime === FALLBACK_END_DT &&
+        prev.items.length === 0
+      ) {
+        return {
+          ...prev,
+          startDateTime: range.startDateTime,
+          endDateTime: range.endDateTime,
+        };
+      }
+      return prev;
+    });
+  }, []);
+
+  // 선택된 여행 일정 데이터
+  const [currentPlanId, setCurrentPlanId] = useState<string | undefined>(initialPlanKey);
   const [planTitle, setPlanTitle] = useState(initialTitle);
-  const [places, setPlaces] = useState<PlaceItem[]>(() =>
-    parsePlanPayload(initialPlaces, initialMembers).parsedPlaces
+  const [places, setPlaces] = useState<PlaceItem[]>(initialParsed.parsedPlaces);
+  const [scheduleConfig, setScheduleConfig] = useState<TripScheduleConfig>(
+    initialParsed.parsedSchedule
   );
-  const [scheduleConfig, setScheduleConfig] = useState<TripScheduleConfig>(() =>
-    parsePlanPayload(initialPlaces, initialMembers).parsedSchedule
+  const [deletedMembers, setDeletedMembers] = useState<string[]>(
+    initialParsed.parsedDeletedMembers
   );
-  const [deletedMembers, setDeletedMembers] = useState<string[]>([]);
   const [members, setMembers] = useState<string[]>(() =>
-    parsePlanPayload(initialPlaces, initialMembers).parsedMembers
+    mergeMembers(
+      initialParsed.parsedMembers,
+      initialParsed.parsedPlaces,
+      loadStoredMembers(initialPlanKey),
+      initialParsed.parsedDeletedMembers
+    )
   );
 
+  // 2단계: 사용자 선택 / 등록 게이트
   const [activeUser, setActiveUser] = useState<string | null>(null);
   const [userGateMode, setUserGateMode] = useState<UserGateMode>("choose");
   const [newUserName, setNewUserName] = useState("");
-  const [showUserGate, setShowUserGate] = useState<boolean>(() => Boolean(planId));
+  const [showUserGate, setShowUserGate] = useState<boolean>(Boolean(planId));
 
+  // 뷰 전환 ("map" | "schedule") 및 시간표 일차 상태
   const [viewMode, setViewMode] = useState<WorkspaceViewMode>("map");
   const [activeDayIndex, setActiveDayIndex] = useState<number>(1);
   const [selectedTimeSlot, setSelectedTimeSlot] = useState<string>("09:00");
 
+  // 지도 / 장소 검색 / 필터 상태
   const [mapInstance, setMapInstance] = useState<any>(null);
   const [markersRef, setMarkersRef] = useState<any[]>([]);
-  const [mapAuthError, setMapAuthError] = useState<boolean>(false);
   const [selectedPlaceId, setSelectedPlaceId] = useState<number | null>(null);
-  const [memoDrafts, setMemoDrafts] = useState<Record<number, string>>({});
   const [editingCategoryPlaceId, setEditingCategoryPlaceId] = useState<number | null>(null);
   const [hoveredPlaceTitle, setHoveredPlaceTitle] = useState<string | null>(null);
   const [markerDisplayMode, setMarkerDisplayMode] = useState<MarkerDisplayMode>("full");
@@ -490,9 +645,7 @@ export default function PlannerWorkspace({
   const [selectedUserFilter, setSelectedUserFilter] = useState<string | null>(null);
   const [isUserFilterOpen, setIsUserFilterOpen] = useState(false);
 
-  const [syncStatus, setSyncStatus] = useState<"idle" | "saving" | "saved" | "error">(
-    "idle"
-  );
+  const [syncStatus, setSyncStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
   const [draftPlace, setDraftPlace] = useState<CandidatePlace | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
@@ -500,96 +653,59 @@ export default function PlannerWorkspace({
   const [draftCategory, setDraftCategory] = useState<PlaceCategory>("sightseeing");
   const [draftMustVisit, setDraftMustVisit] = useState(false);
 
-  const currentPlanIdRef = useRef<string | undefined>(currentPlanId);
+  const hasHydratedFromDbRef = useRef(false);
   const isApplyingRemoteRef = useRef(false);
-  const memoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const previousViewportRef = useRef<{ lat: number; lng: number; zoom: number } | null>(
-    null
-  );
+  const hasUserMutatedRef = useRef(false);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentPlanIdRef = useRef<string | undefined>(currentPlanId);
+  const previousViewportRef = useRef<MapViewportSnapshot | null>(null);
+  const selectedPlaceIdRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    currentPlanIdRef.current = currentPlanId;
-  }, [currentPlanId]);
-
-  useEffect(() => {
-    const range = getDefaultTripRange();
-    setNewStartDateTime(range.startDateTime);
-    setNewEndDateTime(range.endDateTime);
-  }, []);
-
-  const visiblePlaces = useMemo(
-    () => places.filter((p) => !isMembersMetaPlace(p)),
-    [places]
-  );
-
+  const visiblePlaces = places.filter((p) => !isMembersMetaPlace(p));
   const tripDays = useMemo(
     () => computeTripDays(scheduleConfig.startDateTime, scheduleConfig.endDateTime),
     [scheduleConfig.startDateTime, scheduleConfig.endDateTime]
   );
 
-  const placesMapSignature = useMemo(
-    () =>
-      visiblePlaces
-        .map(
-          (p) =>
-            `${p.id}:${p.lat}:${p.lng}:${p.title}:${getPlaceCategory(p)}:${
-              p.isMustVisit ? 1 : 0
-            }`
-        )
-        .join("|"),
-    [visiblePlaces]
-  );
-
   useEffect(() => {
-    setMemoDrafts((prev) => {
-      const next: Record<number, string> = {};
-      for (const p of visiblePlaces) {
-        next[p.id] = prev[p.id] !== undefined ? prev[p.id] : p.memo;
-      }
-      return next;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [placesMapSignature]);
-
-  useEffect(() => {
-    return () => {
-      if (memoSaveTimerRef.current) clearTimeout(memoSaveTimerRef.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (tripDays.length > 0 && activeDayIndex > tripDays.length) {
+    if (activeDayIndex > tripDays.length) {
       setActiveDayIndex(tripDays.length);
     } else if (activeDayIndex < 1) {
       setActiveDayIndex(1);
     }
   }, [activeDayIndex, tripDays.length]);
 
-  const filteredPlaces = useMemo(
-    () =>
-      visiblePlaces.filter((place) => {
-        const matchesCategory =
-          selectedCategories.length === 0 ||
-          selectedCategories.includes(getPlaceCategory(place));
-        const matchesMustVisit = !onlyMustVisitFilter || Boolean(place.isMustVisit);
-        const matchesUser =
-          selectedUserFilter === null ||
-          (place.createdBy || "익명") === selectedUserFilter;
-        return matchesCategory && matchesMustVisit && matchesUser;
-      }),
-    [visiblePlaces, selectedCategories, onlyMustVisitFilter, selectedUserFilter]
-  );
+  const filteredPlaces = visiblePlaces.filter((place) => {
+    const matchesCategory =
+      selectedCategories.length === 0 ||
+      selectedCategories.includes(getPlaceCategory(place));
+    const matchesMustVisit = !onlyMustVisitFilter || Boolean(place.isMustVisit);
+    const matchesUser =
+      selectedUserFilter === null ||
+      (place.createdBy || "익명") === selectedUserFilter;
+    return matchesCategory && matchesMustVisit && matchesUser;
+  });
 
-  const filterableUsers = useMemo(
-    () => mergeMembers(members, visiblePlaces, deletedMembers),
-    [members, visiblePlaces, deletedMembers]
-  );
+  const filterableUsers = mergeMembers(members, visiblePlaces, [], deletedMembers);
 
   const currentDayScheduleItems = useMemo(
     () =>
-      (scheduleConfig.items || []).filter((item) => item.dayIndex === activeDayIndex),
+      scheduleConfig.items.filter((item) => item.dayIndex === activeDayIndex),
     [scheduleConfig.items, activeDayIndex]
   );
+
+  useEffect(() => {
+    selectedPlaceIdRef.current = selectedPlaceId;
+  }, [selectedPlaceId]);
+
+  useEffect(() => {
+    currentPlanIdRef.current = currentPlanId;
+    if (currentPlanId) {
+      saveStoredPlanId(currentPlanId);
+    }
+    saveStoredMembers(currentPlanId, members);
+    saveStoredDeletedMembers(currentPlanId, deletedMembers);
+  }, [currentPlanId, members, deletedMembers]);
 
   const refreshAllPlansList = useCallback(async () => {
     try {
@@ -599,17 +715,14 @@ export default function PlannerWorkspace({
         .order("updated_at", { ascending: false })
         .limit(30);
 
-      if (!error && Array.isArray(data)) {
+      if (!error && Array.isArray(data) && data.length > 0) {
         const mapped: PlanSummaryItem[] = data
           .filter((row) => row && typeof row.id === "string")
           .map((row) => {
             const parsed = parsePlanPayload(row.places);
             return {
               id: row.id,
-              title:
-                typeof row.title === "string" && row.title.trim()
-                  ? row.title
-                  : "제목 없는 여행",
+              title: typeof row.title === "string" && row.title.trim() ? row.title : "제목 없는 여행",
               startDateTime: parsed.parsedSchedule.startDateTime,
               endDateTime: parsed.parsedSchedule.endDateTime,
               placesCount: parsed.parsedPlaces.length,
@@ -617,7 +730,13 @@ export default function PlannerWorkspace({
             };
           });
         setKnownPlans(mapped);
-        saveKnownPlans(mapped);
+        if (typeof window !== "undefined") {
+          try {
+            window.localStorage.setItem(getKnownPlansStorageKey(), JSON.stringify(mapped));
+          } catch {
+            // 무시
+          }
+        }
       }
     } catch (err) {
       console.error("여행 목록 조회 실패:", err);
@@ -630,140 +749,195 @@ export default function PlannerWorkspace({
     }
   }, [showPlanGate, planGateMode, refreshAllPlansList]);
 
-  const loadSinglePlan = useCallback(async (targetId: string) => {
-    currentPlanIdRef.current = targetId;
-    setCurrentPlanId(targetId);
-    setSelectedPlaceId(null);
-    setDraftPlace(null);
-    setSearchResults([]);
-    setSyncStatus("saving");
-
+  const hydratePlanFromServer = useCallback(async (targetId?: string) => {
     try {
-      const { data, error } = await supabase
-        .from("travel_plans")
-        .select("*")
-        .eq("id", targetId)
-        .maybeSingle();
+      let row: {
+        id?: string;
+        title?: string;
+        places?: unknown;
+        members?: unknown;
+        updated_at?: string;
+      } | null = null;
 
-      if (error) throw error;
+      if (targetId) {
+        const { data, error } = await supabase
+          .from("travel_plans")
+          .select("*")
+          .eq("id", targetId)
+          .maybeSingle();
+        if (!error && data) {
+          row = data;
+        }
+      }
 
-      isApplyingRemoteRef.current = true;
-      if (data) {
+      if (!row && targetId) {
+        const { data, error } = await supabase
+          .from("travel_plans")
+          .select("*")
+          .order("updated_at", { ascending: false })
+          .limit(1);
+        if (!error && Array.isArray(data) && data.length > 0) {
+          row = data[0];
+        }
+      }
+
+      if (row) {
+        const resolvedId = typeof row.id === "string" && row.id ? row.id : targetId;
+        if (resolvedId) {
+          currentPlanIdRef.current = resolvedId;
+          setCurrentPlanId(resolvedId);
+          saveStoredPlanId(resolvedId);
+        }
+
+        const localDeleted = loadStoredDeletedMembers(resolvedId);
+        const localMembers = loadStoredMembers(resolvedId);
         const {
           parsedPlaces,
           parsedMembers,
           parsedDeletedMembers,
           parsedSchedule,
-        } = parsePlanPayload(data.places, data.members);
+        } = parsePlanPayload(row.places, row.members, localDeleted);
+
+        const nextDeleted = Array.from(new Set([...parsedDeletedMembers, ...localDeleted]));
+        const nextMembers = mergeMembers(
+          [...parsedMembers, ...localMembers],
+          parsedPlaces,
+          [],
+          nextDeleted
+        );
 
         const nextTitle =
-          typeof data.title === "string" && data.title.trim()
-            ? data.title
-            : "나의 제주 여행 일정";
+          typeof row.title === "string" && row.title.trim() ? row.title : "나의 제주 여행 일정";
 
+        isApplyingRemoteRef.current = true;
         setPlanTitle(nextTitle);
-        setPlaces(parsedPlaces);
-        setScheduleConfig(parsedSchedule);
-        setDeletedMembers(parsedDeletedMembers);
-        setMembers(mergeMembers(parsedMembers, parsedPlaces, parsedDeletedMembers));
-        setKnownPlans(
-          upsertKnownPlan({
-            id: targetId,
-            title: nextTitle,
-            startDateTime: parsedSchedule.startDateTime,
-            endDateTime: parsedSchedule.endDateTime,
-            placesCount: parsedPlaces.length,
-            updatedAt: data.updated_at,
-          })
-        );
-      } else {
-        setPlaces([]);
-        setScheduleConfig({
-          startDateTime: FALLBACK_START_DT,
-          endDateTime: FALLBACK_END_DT,
-          items: [],
+        setPlaces((prev) => {
+          const currentReal = prev.filter((p) => !isMembersMetaPlace(p));
+          if (parsedPlaces.length === 0 && currentReal.length > 0 && hasUserMutatedRef.current) {
+            return currentReal;
+          }
+          return parsedPlaces;
         });
-        setDeletedMembers([]);
-        setMembers([]);
+        setScheduleConfig(parsedSchedule);
+        setDeletedMembers(nextDeleted);
+        setMembers(nextMembers);
+        saveStoredDeletedMembers(resolvedId, nextDeleted);
+        saveStoredMembers(resolvedId, nextMembers);
+        if (resolvedId) {
+          setKnownPlans(
+            upsertKnownPlan({
+              id: resolvedId,
+              title: nextTitle,
+              startDateTime: parsedSchedule.startDateTime,
+              endDateTime: parsedSchedule.endDateTime,
+              placesCount: parsedPlaces.length,
+              updatedAt: row.updated_at,
+            })
+          );
+        }
+        setSyncStatus("saved");
+        setTimeout(() => {
+          isApplyingRemoteRef.current = false;
+        }, 120);
       }
-      setSyncStatus("saved");
     } catch (err) {
       console.error("일정 불러오기 실패:", err);
-      setSyncStatus("error");
     } finally {
-      setTimeout(() => {
-        isApplyingRemoteRef.current = false;
-      }, 150);
+      hasHydratedFromDbRef.current = true;
     }
   }, []);
 
   useEffect(() => {
     if (planId) {
+      currentPlanIdRef.current = planId;
+      setCurrentPlanId(planId);
+      saveStoredPlanId(planId);
       setShowPlanGate(false);
       setShowUserGate(true);
-      loadSinglePlan(planId);
+      hydratePlanFromServer(planId);
     }
-  }, [planId, loadSinglePlan]);
+  }, [planId, hydratePlanFromServer]);
 
-  const commitPlanState = useCallback(
-    async (params: {
-      title?: string;
-      places?: PlaceItem[];
-      members?: string[];
-      deletedMembers?: string[];
-      schedule?: TripScheduleConfig;
-      planIdOverride?: string;
-    }) => {
-      const targetId = params.planIdOverride || currentPlanIdRef.current;
-      const nextTitle = params.title ?? planTitle;
-      const nextPlaces = (params.places ?? visiblePlaces).filter(
-        (p) => !isMembersMetaPlace(p)
-      );
-      const nextDeleted = params.deletedMembers ?? deletedMembers;
-      const nextMembers = params.members ?? members;
-      const nextSchedule = params.schedule ?? scheduleConfig;
-
-      let savedId = targetId;
+  const persistPlanToDb = useCallback(
+    async (
+      nextTitle: string,
+      nextPlaces: PlaceItem[],
+      nextMembers: string[],
+      nextDeletedMembers: string[] = deletedMembers,
+      nextSchedule: TripScheduleConfig = scheduleConfig,
+      overridePlanId?: string
+    ): Promise<string | undefined> => {
+      const activeId = overridePlanId || currentPlanIdRef.current;
+      saveStoredMembers(activeId, nextMembers);
+      saveStoredDeletedMembers(activeId, nextDeletedMembers);
       setSyncStatus("saving");
       try {
+        const cleanPlaces = nextPlaces.filter((p) => !isMembersMetaPlace(p));
+        const placesWithMeta = [
+          ...cleanPlaces,
+          {
+            id: MEMBERS_META_ID,
+            lat: 0,
+            lng: 0,
+            title: "__MEMBERS__",
+            memo: "",
+            members: nextMembers,
+            deletedMembers: nextDeletedMembers,
+            scheduleConfig: nextSchedule,
+          } as PlaceItem & {
+            members: string[];
+            deletedMembers: string[];
+            scheduleConfig: TripScheduleConfig;
+          },
+        ];
+
         const payload = {
           title: nextTitle,
-          places: [
-            ...nextPlaces,
-            {
-              id: MEMBERS_META_ID,
-              lat: 0,
-              lng: 0,
-              title: "__MEMBERS__",
-              memo: "",
-              members: nextMembers,
-              deletedMembers: nextDeleted,
-              scheduleConfig: nextSchedule,
-            },
-          ],
+          places: placesWithMeta,
           members: nextMembers,
         };
 
-        if (savedId) {
-          const res = await fetch(`/api/plans/${savedId}`, {
+        let savedId = activeId;
+
+        if (activeId) {
+          const res = await fetch(`/api/plans/${activeId}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
           });
-          if (!res.ok) throw new Error("일정 저장 실패");
+          if (!res.ok) throw new Error("업데이트 실패");
         } else {
           const res = await fetch("/api/plans", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
           });
-          if (!res.ok) throw new Error("일정 생성 실패");
-          const created = await res.json();
-          if (created?.id) {
-            savedId = created.id;
-            currentPlanIdRef.current = created.id;
-            setCurrentPlanId(created.id);
-            router.replace(`/plan/${created.id}`);
+          if (!res.ok) throw new Error("생성 실패");
+          const data = await res.json();
+          if (data?.id) {
+            savedId = data.id;
+            const oldKey = getMemberStorageKey(undefined);
+            const newKey = getMemberStorageKey(data.id);
+            const oldDelKey = getDeletedMemberStorageKey(undefined);
+            const newDelKey = getDeletedMemberStorageKey(data.id);
+            try {
+              const existingOld = window.localStorage.getItem(oldKey);
+              if (existingOld && !window.localStorage.getItem(newKey)) {
+                window.localStorage.setItem(newKey, existingOld);
+              }
+              const existingDelOld = window.localStorage.getItem(oldDelKey);
+              if (existingDelOld && !window.localStorage.getItem(newDelKey)) {
+                window.localStorage.setItem(newDelKey, existingDelOld);
+              }
+            } catch {
+              // 무시
+            }
+            currentPlanIdRef.current = data.id;
+            setCurrentPlanId(data.id);
+            saveStoredPlanId(data.id);
+            saveStoredMembers(data.id, nextMembers);
+            saveStoredDeletedMembers(data.id, nextDeletedMembers);
+            router.replace(`/plan/${data.id}`);
           }
         }
 
@@ -774,7 +948,7 @@ export default function PlannerWorkspace({
               title: nextTitle,
               startDateTime: nextSchedule.startDateTime,
               endDateTime: nextSchedule.endDateTime,
-              placesCount: nextPlaces.length,
+              placesCount: cleanPlaces.length,
               updatedAt: new Date().toISOString(),
             })
           );
@@ -782,13 +956,13 @@ export default function PlannerWorkspace({
 
         setSyncStatus("saved");
         return savedId;
-      } catch (err) {
-        console.error("저장 오류:", err);
+      } catch (error) {
+        console.error("자동 저장 오류:", error);
         setSyncStatus("error");
-        return savedId;
+        return activeId;
       }
     },
-    [planTitle, visiblePlaces, deletedMembers, members, scheduleConfig, router]
+    [deletedMembers, router, scheduleConfig]
   );
 
   const handleCreateNewTripPlan = async (e: React.FormEvent) => {
@@ -797,6 +971,10 @@ export default function PlannerWorkspace({
     const effectiveStart = newStartDateTime || getDefaultTripRange().startDateTime;
     const effectiveEnd = newEndDateTime || getDefaultTripRange().endDateTime;
 
+    if (!effectiveStart || !effectiveEnd) {
+      alert("시작 날짜/시간과 종료 날짜/시간을 모두 선택해 주세요.");
+      return;
+    }
     if (new Date(effectiveEnd).getTime() < new Date(effectiveStart).getTime()) {
       alert("종료 날짜/시간이 시작 날짜/시간보다 빠를 수 없습니다.");
       return;
@@ -809,6 +987,16 @@ export default function PlannerWorkspace({
         endDateTime: effectiveEnd,
         items: [],
       };
+
+      hasUserMutatedRef.current = true;
+      setPlanTitle(trimmedTitle);
+      setPlaces([]);
+      setScheduleConfig(initialSchedule);
+      setMembers([]);
+      setDeletedMembers([]);
+      setActiveUser(null);
+      setActiveDayIndex(1);
+      setViewMode("map");
 
       const res = await fetch("/api/plans", {
         method: "POST",
@@ -830,23 +1018,15 @@ export default function PlannerWorkspace({
           members: [],
         }),
       });
-      if (!res.ok) throw new Error("여행 일정 생성 실패");
-      const created = await res.json();
-      const createdId = created?.id as string | undefined;
 
-      currentPlanIdRef.current = createdId;
-      setCurrentPlanId(createdId);
-      setPlanTitle(trimmedTitle);
-      setPlaces([]);
-      setMemoDrafts({});
-      setScheduleConfig(initialSchedule);
-      setMembers([]);
-      setDeletedMembers([]);
-      setActiveUser(null);
-      setActiveDayIndex(1);
-      setViewMode("map");
+      if (!res.ok) throw new Error("여행 일정 생성 실패");
+      const data = await res.json();
+      const createdId = data?.id;
 
       if (createdId) {
+        currentPlanIdRef.current = createdId;
+        setCurrentPlanId(createdId);
+        saveStoredPlanId(createdId);
         setKnownPlans(
           upsertKnownPlan({
             id: createdId,
@@ -860,6 +1040,7 @@ export default function PlannerWorkspace({
         router.replace(`/plan/${createdId}`);
       }
 
+      hasHydratedFromDbRef.current = true;
       setShowPlanGate(false);
       setUserGateMode("choose");
       setShowUserGate(true);
@@ -872,18 +1053,49 @@ export default function PlannerWorkspace({
   };
 
   const handleSelectExistingPlan = async (targetPlanId: string) => {
+    currentPlanIdRef.current = targetPlanId;
+    setCurrentPlanId(targetPlanId);
+    saveStoredPlanId(targetPlanId);
     setActiveUser(null);
     setActiveDayIndex(1);
     setViewMode("map");
-    await loadSinglePlan(targetPlanId);
+    hasHydratedFromDbRef.current = false;
+    await hydratePlanFromServer(targetPlanId);
     setShowPlanGate(false);
     setUserGateMode("choose");
     setShowUserGate(true);
   };
 
   const handleRemoveKnownPlan = (targetId: string) => {
-    setKnownPlans(removeKnownPlan(targetId));
+    const next = removeKnownPlan(targetId);
+    setKnownPlans(next);
+    if (currentPlanIdRef.current === targetId) {
+      currentPlanIdRef.current = undefined;
+      setCurrentPlanId(undefined);
+    }
   };
+
+  useEffect(() => {
+    if (showPlanGate || showUserGate) return;
+    if (!hasHydratedFromDbRef.current) return;
+    if (isApplyingRemoteRef.current) return;
+    if (!hasUserMutatedRef.current) return;
+
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+    }
+
+    saveTimerRef.current = setTimeout(() => {
+      persistPlanToDb(planTitle, visiblePlaces, members, deletedMembers, scheduleConfig);
+    }, 300);
+
+    return () => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [places, planTitle, members, deletedMembers, scheduleConfig, showPlanGate, showUserGate, persistPlanToDb]);
 
   useEffect(() => {
     if (!currentPlanId) return;
@@ -899,7 +1111,6 @@ export default function PlannerWorkspace({
           filter: `id=eq.${currentPlanId}`,
         },
         (payload) => {
-          if (isApplyingRemoteRef.current || syncStatus === "saving") return;
           const updated = payload.new as {
             title?: string;
             places?: unknown;
@@ -907,12 +1118,20 @@ export default function PlannerWorkspace({
           };
           if (!updated) return;
 
+          if (saveTimerRef.current) {
+            clearTimeout(saveTimerRef.current);
+          }
+
           const {
             parsedPlaces,
             parsedMembers,
             parsedDeletedMembers,
             parsedSchedule,
-          } = parsePlanPayload(updated.places, updated.members);
+          } = parsePlanPayload(
+            updated.places,
+            updated.members,
+            deletedMembers
+          );
 
           isApplyingRemoteRef.current = true;
           if (typeof updated.title === "string" && updated.title.trim()) {
@@ -921,10 +1140,14 @@ export default function PlannerWorkspace({
           setPlaces(parsedPlaces);
           setScheduleConfig(parsedSchedule);
           setDeletedMembers(parsedDeletedMembers);
-          setMembers(mergeMembers(parsedMembers, parsedPlaces, parsedDeletedMembers));
+          setMembers((prev) =>
+            mergeMembers(parsedMembers, parsedPlaces, prev, parsedDeletedMembers)
+          );
+          setSyncStatus("saved");
+
           setTimeout(() => {
             isApplyingRemoteRef.current = false;
-          }, 150);
+          }, 120);
         }
       )
       .subscribe();
@@ -932,7 +1155,7 @@ export default function PlannerWorkspace({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [currentPlanId, syncStatus]);
+  }, [currentPlanId, deletedMembers]);
 
   const resetSelectionAndViewport = useCallback(() => {
     setSelectedPlaceId(null);
@@ -947,120 +1170,86 @@ export default function PlannerWorkspace({
   const handleSelectPin = useCallback(
     (place: PlaceItem) => {
       setDraftPlace(null);
+
       if (markerDisplayMode === "hidden") {
         setMarkerDisplayMode("compact");
       }
+
       if (!mapInstance || !window.naver) {
         setSelectedPlaceId(place.id);
         return;
       }
-      if (selectedPlaceId === null && !previousViewportRef.current) {
-        const c = mapInstance.getCenter();
+
+      if (selectedPlaceIdRef.current === null && !previousViewportRef.current) {
+        const currentCenter = mapInstance.getCenter();
         previousViewportRef.current = {
-          lat: c.lat(),
-          lng: c.lng(),
+          lat: currentCenter.lat(),
+          lng: currentCenter.lng(),
           zoom: mapInstance.getZoom(),
         };
       }
+
       setSelectedPlaceId(place.id);
       mapInstance.setCenter(new window.naver.maps.LatLng(place.lat, place.lng));
       mapInstance.setZoom(15);
     },
-    [mapInstance, markerDisplayMode, selectedPlaceId]
+    [mapInstance, markerDisplayMode]
   );
 
+  const handleMapClick = useCallback(() => {
+    if (selectedPlaceIdRef.current !== null || previousViewportRef.current) {
+      resetSelectionAndViewport();
+    }
+  }, [resetSelectionAndViewport]);
+
   useEffect(() => {
-    if (showPlanGate || showUserGate || viewMode !== "map") {
-      markersRef.forEach((m) => {
-        try {
-          m.setMap(null);
-        } catch {
-          // 무시
-        }
-      });
-      setMarkersRef([]);
-      setMapInstance(null);
-      return;
-    }
+    if (showPlanGate || showUserGate || viewMode !== "map") return;
 
-    let cancelled = false;
-    setMapAuthError(false);
-
-    const authFailHandler = () => {
-      if (!cancelled) setMapAuthError(true);
-    };
-    window.addEventListener("naver_auth_fail", authFailHandler);
-    if (window.naver && window.naver.maps && window.naver.maps.Event) {
-      window.naver.maps.Event.addListener(window.naver.maps, "authfail", authFailHandler);
-    }
+    setMapInstance(null);
+    setMarkersRef([]);
 
     const initMap = () => {
-      if (cancelled) return;
-      const mapEl = document.getElementById("map");
-      if (!mapEl) return;
       if (window.naver && window.naver.maps) {
-        try {
-          const first = visiblePlaces[0];
-          const map = new window.naver.maps.Map(mapEl, {
-            center: new window.naver.maps.LatLng(
-              first ? first.lat : 33.3846,
-              first ? first.lng : 126.5535
-            ),
-            zoom: first ? 12 : 10,
-          });
-          setMapInstance(map);
-        } catch {
-          setMapAuthError(true);
-        }
+        const firstPlace = visiblePlaces[0];
+        const centerLat = firstPlace ? firstPlace.lat : 33.3846;
+        const centerLng = firstPlace ? firstPlace.lng : 126.5535;
+        const zoomLevel = firstPlace ? 12 : 10;
+
+        const map = new window.naver.maps.Map("map", {
+          center: new window.naver.maps.LatLng(centerLat, centerLng),
+          zoom: zoomLevel,
+        });
+        setMapInstance(map);
       }
     };
 
     if (window.naver && window.naver.maps) {
       initMap();
     } else {
-      const interval = setInterval(() => {
+      const checkInterval = setInterval(() => {
         if (window.naver && window.naver.maps) {
-          clearInterval(interval);
+          clearInterval(checkInterval);
           initMap();
         }
-      }, 150);
-      const timeout = setTimeout(() => {
-        clearInterval(interval);
-        if (!cancelled && (!window.naver || !window.naver.maps)) {
-          setMapAuthError(true);
-        }
-      }, 4000);
-      return () => {
-        cancelled = true;
-        clearInterval(interval);
-        clearTimeout(timeout);
-        window.removeEventListener("naver_auth_fail", authFailHandler);
-      };
+      }, 100);
+      return () => clearInterval(checkInterval);
     }
-
-    return () => {
-      cancelled = true;
-      window.removeEventListener("naver_auth_fail", authFailHandler);
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showPlanGate, showUserGate, viewMode]);
 
   useEffect(() => {
-    if (!mapInstance || !window.naver || viewMode !== "map") return;
-    const listener = window.naver.maps.Event.addListener(mapInstance, "click", () => {
-      if (selectedPlaceId !== null || previousViewportRef.current) {
-        resetSelectionAndViewport();
-      }
-    });
+    if (!mapInstance || !window.naver) return;
+    const listener = window.naver.maps.Event.addListener(mapInstance, "click", handleMapClick);
     return () => {
       window.naver.maps.Event.removeListener(listener);
     };
-  }, [mapInstance, viewMode, selectedPlaceId, resetSelectionAndViewport]);
+  }, [mapInstance, handleMapClick]);
 
   useEffect(() => {
-    if (!mapInstance || !window.naver || viewMode !== "map") return;
+    if (!mapInstance || !window.naver) return;
 
     markersRef.forEach((m) => m.setMap(null));
+
     if (markerDisplayMode === "hidden") {
       setMarkersRef([]);
       return;
@@ -1068,39 +1257,113 @@ export default function PlannerWorkspace({
 
     const nextMarkers = filteredPlaces.map((p, idx) => {
       const isSelected = p.id === selectedPlaceId;
+      const position = new window.naver.maps.LatLng(p.lat, p.lng);
       const cat = getPlaceCategory(p);
       const style = CATEGORY_STYLES[cat];
       const isCompact = markerDisplayMode === "compact" && !isSelected;
       const isStarred = Boolean(p.isMustVisit);
 
       const starBadgeHtml = isStarred
-        ? `<span style="position:absolute;top:-7px;right:-6px;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:9999px;background:#facc15;border:1.5px solid #fff;font-size:10px;">⭐</span>`
+        ? `<span style="
+            position: absolute;
+            top: -7px;
+            right: -6px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 16px;
+            height: 16px;
+            border-radius: 9999px;
+            background: #facc15;
+            border: 1.5px solid #ffffff;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.22);
+            font-size: 10px;
+            line-height: 1;
+          ">⭐</span>`
         : "";
 
       const marker = new window.naver.maps.Marker({
-        position: new window.naver.maps.LatLng(p.lat, p.lng),
+        position,
         map: mapInstance,
         cursor: "pointer",
         title: `${isStarred ? "⭐ " : ""}${p.title} (${style.label})`,
         zIndex: isSelected ? 200 : isStarred ? 150 + idx : 100 + idx,
         icon: isCompact
           ? {
-              content: `<div style="position:relative;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:9999px;background:${style.pinBorder};color:#fff;border:2px solid ${isStarred ? "#facc15" : "#fff"};font-size:12px;font-weight:800;"><span>${style.icon}</span>${starBadgeHtml}</div>`,
+              content: `
+                <div style="
+                  position: relative;
+                  display: inline-flex;
+                  align-items: center;
+                  justify-content: center;
+                  width: 28px;
+                  height: 28px;
+                  border-radius: 9999px;
+                  background: ${style.pinBorder};
+                  color: #ffffff;
+                  border: 2px solid ${isStarred ? "#facc15" : "#ffffff"};
+                  box-shadow: 0 3px 8px rgba(0,0,0,0.22);
+                  font-size: 12px;
+                  font-weight: 800;
+                  cursor: pointer;
+                ">
+                  <span>${style.icon}</span>
+                  ${starBadgeHtml}
+                </div>
+              `,
               anchor: new window.naver.maps.Point(14, 14),
             }
           : {
-              content: `<div style="position:relative;display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:9999px;background:${isSelected ? style.pinBorder : style.pinBg};color:${isSelected ? "#fff" : style.pinText};border:2px solid ${style.pinBorder};font-size:12px;font-weight:700;white-space:nowrap;"><span>${style.icon}</span><span>${idx + 1}. ${p.title}</span>${starBadgeHtml}</div>`,
+              content: `
+                <div style="
+                  position: relative;
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 6px;
+                  padding: 6px 10px;
+                  border-radius: 9999px;
+                  background: ${isSelected ? style.pinBorder : style.pinBg};
+                  color: ${isSelected ? "#ffffff" : style.pinText};
+                  border: 2px solid ${style.pinBorder};
+                  box-shadow: 0 4px 10px rgba(0,0,0,0.18);
+                  font-size: 12px;
+                  font-weight: 700;
+                  white-space: nowrap;
+                  cursor: pointer;
+                  transform: ${isSelected ? "scale(1.08)" : "scale(1)"};
+                  transition: transform 0.15s ease, background-color 0.15s ease;
+                ">
+                  <span style="
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    width: 20px;
+                    height: 20px;
+                    border-radius: 9999px;
+                    background: ${isSelected ? "#ffffff" : style.pinBorder};
+                    color: ${isSelected ? style.pinBorder : "#ffffff"};
+                    font-size: 11px;
+                  ">${style.icon}</span>
+                  <span>${idx + 1}. ${p.title}</span>
+                  ${starBadgeHtml}
+                </div>
+              `,
               anchor: new window.naver.maps.Point(16, 16),
             },
       });
 
       const hoverText = `${isStarred ? "⭐ " : ""}${style.icon} ${p.title} · ${style.label}`;
+
       window.naver.maps.Event.addListener(marker, "mouseover", () => {
         setHoveredPlaceTitle(hoverText);
+        marker.setZIndex(300);
       });
+
       window.naver.maps.Event.addListener(marker, "mouseout", () => {
         setHoveredPlaceTitle((prev) => (prev === hoverText ? null : prev));
+        marker.setZIndex(isSelected ? 200 : isStarred ? 150 + idx : 100 + idx);
       });
+
       window.naver.maps.Event.addListener(marker, "click", () => {
         handleSelectPin(p);
       });
@@ -1111,9 +1374,8 @@ export default function PlannerWorkspace({
     setMarkersRef(nextMarkers);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    placesMapSignature,
+    places,
     mapInstance,
-    viewMode,
     selectedPlaceId,
     markerDisplayMode,
     selectedCategories,
@@ -1122,41 +1384,65 @@ export default function PlannerWorkspace({
     handleSelectPin,
   ]);
 
+  const handleToggleCategoryFilter = (cat: PlaceCategory) => {
+    setSelectedCategories((prev) => {
+      if (prev.includes(cat)) {
+        return prev.filter((item) => item !== cat);
+      }
+      const next = [...prev, cat];
+      return next.length === CATEGORY_ORDER.length ? [] : next;
+    });
+  };
+
+  const handleResetAllCategoryFilters = () => {
+    setSelectedCategories([]);
+    setOnlyMustVisitFilter(false);
+  };
+
   const handleRegisterNewUser = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = newUserName.trim();
     if (!trimmed) return;
 
+    hasUserMutatedRef.current = true;
     const nextDeleted = deletedMembers.filter((m) => m !== trimmed);
-    const nextMembers = mergeMembers([...members, trimmed], visiblePlaces, nextDeleted);
+    const updatedMembers = mergeMembers(members, visiblePlaces, [trimmed], nextDeleted);
 
     setDeletedMembers(nextDeleted);
-    setMembers(nextMembers);
+    setMembers(updatedMembers);
+    saveStoredDeletedMembers(currentPlanIdRef.current, nextDeleted);
+    saveStoredMembers(currentPlanIdRef.current, updatedMembers);
     setActiveUser(trimmed);
     setNewUserName("");
     setShowUserGate(false);
 
-    await commitPlanState({ members: nextMembers, deletedMembers: nextDeleted });
+    await persistPlanToDb(planTitle, visiblePlaces, updatedMembers, nextDeleted, scheduleConfig);
   };
 
   const handlePickExistingUser = async (name: string) => {
     setActiveUser(name);
     setShowUserGate(false);
-    if (currentPlanIdRef.current) {
-      await loadSinglePlan(currentPlanIdRef.current);
-    }
+    await hydratePlanFromServer(currentPlanIdRef.current);
   };
 
   const handleDeleteUser = async (targetName: string) => {
+    hasUserMutatedRef.current = true;
     const nextDeleted = Array.from(new Set([...deletedMembers, targetName]));
     const nextMembers = members.filter((m) => m !== targetName);
 
     setDeletedMembers(nextDeleted);
     setMembers(nextMembers);
-    if (activeUser === targetName) setActiveUser(null);
-    if (selectedUserFilter === targetName) setSelectedUserFilter(null);
+    saveStoredDeletedMembers(currentPlanIdRef.current, nextDeleted);
+    saveStoredMembers(currentPlanIdRef.current, nextMembers);
 
-    await commitPlanState({ members: nextMembers, deletedMembers: nextDeleted });
+    if (activeUser === targetName) {
+      setActiveUser(null);
+    }
+    if (selectedUserFilter === targetName) {
+      setSelectedUserFilter(null);
+    }
+
+    await persistPlanToDb(planTitle, visiblePlaces, nextMembers, nextDeleted, scheduleConfig);
   };
 
   const handleSearch = async (e: React.FormEvent) => {
@@ -1169,12 +1455,13 @@ export default function PlannerWorkspace({
       const res = await fetch(`/api/search?query=${encodeURIComponent(trimmed)}`);
       const data = await res.json();
       const items: CandidatePlace[] = Array.isArray(data?.items) ? data.items : [];
+
       setSearchResults(items);
       if (items.length === 0) {
         alert("검색 결과가 없습니다. 다른 키워드로 검색해 보세요.");
       }
-    } catch (err) {
-      console.error("검색 요청 실패:", err);
+    } catch (error) {
+      console.error("검색 요청 실패:", error);
       alert("검색 중 오류가 발생했습니다.");
     } finally {
       setIsSearching(false);
@@ -1184,10 +1471,12 @@ export default function PlannerWorkspace({
   const handleSelectCandidate = (candidate: CandidatePlace) => {
     setSelectedPlaceId(null);
     previousViewportRef.current = null;
+
     if (mapInstance && window.naver) {
       mapInstance.setCenter(new window.naver.maps.LatLng(candidate.lat, candidate.lng));
       mapInstance.setZoom(15);
     }
+
     setDraftPlace(candidate);
     setDraftTitle(candidate.title);
     setDraftMemo("");
@@ -1203,12 +1492,12 @@ export default function PlannerWorkspace({
     const finalTitle = draftTitle.trim() || draftPlace.title.trim() || "제주 장소";
     const finalMemo = draftMemo.trim();
     const creator = activeUser || "익명";
-    const newId = Date.now();
 
+    hasUserMutatedRef.current = true;
     const nextPlaces: PlaceItem[] = [
       ...visiblePlaces,
       {
-        id: newId,
+        id: Date.now(),
         lat: draftPlace.lat,
         lng: draftPlace.lng,
         title: finalTitle,
@@ -1220,82 +1509,59 @@ export default function PlannerWorkspace({
     ];
 
     setPlaces(nextPlaces);
-    setMemoDrafts((prev) => ({ ...prev, [newId]: finalMemo }));
     setDraftPlace(null);
     setDraftTitle("");
     setDraftMemo("");
     setDraftMustVisit(false);
     setSearchKeyword("");
 
-    await commitPlanState({ places: nextPlaces });
+    await persistPlanToDb(planTitle, nextPlaces, members, deletedMembers, scheduleConfig);
   };
 
-  const handleUpdateMemo = useCallback(
-    (id: number, nextMemo: string) => {
-      setMemoDrafts((prev) => ({ ...prev, [id]: nextMemo }));
-      if (memoSaveTimerRef.current) clearTimeout(memoSaveTimerRef.current);
-
-      memoSaveTimerRef.current = setTimeout(() => {
-        const nextPlaces = visiblePlaces.map((p) =>
-          p.id === id ? { ...p, memo: nextMemo } : p
-        );
-        setPlaces(nextPlaces);
-        commitPlanState({ places: nextPlaces });
-      }, 250);
-    },
-    [visiblePlaces, commitPlanState]
-  );
-
-  const handleChangePlaceCategory = async (id: number, nextCategory: PlaceCategory) => {
-    const nextPlaces = visiblePlaces.map((p) =>
-      p.id === id ? { ...p, categoryType: nextCategory } : p
+  const handleUpdateMemo = (id: number, nextMemo: string) => {
+    hasUserMutatedRef.current = true;
+    setPlaces((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, memo: nextMemo } : p))
     );
-    setPlaces(nextPlaces);
+  };
+
+  const handleChangePlaceCategory = (id: number, nextCategory: PlaceCategory) => {
+    hasUserMutatedRef.current = true;
+    setPlaces((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, categoryType: nextCategory } : p))
+    );
     setEditingCategoryPlaceId(null);
-    await commitPlanState({ places: nextPlaces });
   };
 
-  const handleTogglePlaceMustVisit = async (id: number) => {
-    const nextPlaces = visiblePlaces.map((p) =>
-      p.id === id ? { ...p, isMustVisit: !p.isMustVisit } : p
+  const handleTogglePlaceMustVisit = (id: number) => {
+    hasUserMutatedRef.current = true;
+    setPlaces((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, isMustVisit: !p.isMustVisit } : p))
     );
-    setPlaces(nextPlaces);
-    await commitPlanState({ places: nextPlaces });
   };
 
-  const handleDeletePlace = async (id: number) => {
+  const handleDeletePlace = (id: number) => {
+    hasUserMutatedRef.current = true;
     if (selectedPlaceId === id) {
       resetSelectionAndViewport();
     }
     if (editingCategoryPlaceId === id) {
       setEditingCategoryPlaceId(null);
     }
-    setMemoDrafts((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-
-    const nextPlaces = visiblePlaces.filter((p) => p.id !== id);
-    const nextSchedule: TripScheduleConfig = {
-      ...scheduleConfig,
-      items: (scheduleConfig.items || []).filter((it) => it.placeId !== id),
-    };
-
-    setPlaces(nextPlaces);
-    setScheduleConfig(nextSchedule);
-    await commitPlanState({ places: nextPlaces, schedule: nextSchedule });
+    setPlaces((prev) => prev.filter((p) => p.id !== id));
   };
 
   const handleAddPlaceToDaySchedule = async (place: PlaceItem, targetSlot?: string) => {
     const slot = targetSlot || selectedTimeSlot || "09:00";
+    hasUserMutatedRef.current = true;
+
     const newSlotItem: ScheduleSlotItem = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       dayIndex: activeDayIndex,
       timeSlot: slot,
       placeId: place.id,
       title: place.title,
-      memo: memoDrafts[place.id] ?? place.memo,
+      memo: place.memo,
       categoryType: getPlaceCategory(place),
       isMustVisit: Boolean(place.isMustVisit),
       createdBy: place.createdBy || "익명",
@@ -1303,36 +1569,43 @@ export default function PlannerWorkspace({
 
     const nextSchedule: TripScheduleConfig = {
       ...scheduleConfig,
-      items: [...(scheduleConfig.items || []), newSlotItem],
+      items: [...scheduleConfig.items, newSlotItem],
     };
 
     setScheduleConfig(nextSchedule);
-    await commitPlanState({ schedule: nextSchedule });
+    await persistPlanToDb(planTitle, visiblePlaces, members, deletedMembers, nextSchedule);
   };
 
   const handleRemoveScheduleItem = async (slotItemId: string) => {
+    hasUserMutatedRef.current = true;
     const nextSchedule: TripScheduleConfig = {
       ...scheduleConfig,
-      items: (scheduleConfig.items || []).filter((it) => it.id !== slotItemId),
+      items: scheduleConfig.items.filter((it) => it.id !== slotItemId),
     };
     setScheduleConfig(nextSchedule);
-    await commitPlanState({ schedule: nextSchedule });
+    await persistPlanToDb(planTitle, visiblePlaces, members, deletedMembers, nextSchedule);
   };
 
   const handleUpdateScheduleItemSlot = async (slotItemId: string, nextTimeSlot: string) => {
+    hasUserMutatedRef.current = true;
     const nextSchedule: TripScheduleConfig = {
       ...scheduleConfig,
-      items: (scheduleConfig.items || []).map((it) =>
+      items: scheduleConfig.items.map((it) =>
         it.id === slotItemId ? { ...it, timeSlot: nextTimeSlot } : it
       ),
     };
     setScheduleConfig(nextSchedule);
-    await commitPlanState({ schedule: nextSchedule });
+    await persistPlanToDb(planTitle, visiblePlaces, members, deletedMembers, nextSchedule);
   };
 
   const handleCopyShareLink = async () => {
-    const targetId = currentPlanIdRef.current || (await commitPlanState({}));
+    if (!currentPlanIdRef.current) {
+      hasUserMutatedRef.current = true;
+      await persistPlanToDb(planTitle, visiblePlaces, members, deletedMembers, scheduleConfig);
+    }
+    const targetId = currentPlanIdRef.current;
     if (!targetId) return;
+
     const shareUrl = `${window.location.origin}/plan/${targetId}`;
     try {
       await navigator.clipboard.writeText(shareUrl);
@@ -1352,12 +1625,11 @@ export default function PlannerWorkspace({
     : null;
 
   const isAllFilterActive = selectedCategories.length === 0 && !onlyMustVisitFilter;
-  const currentDayMeta = tripDays[activeDayIndex - 1] || tripDays[0];
 
   const statusLabel = {
     idle: currentPlanId ? "실시간 동기화 중" : "추가 시 자동 저장",
     saving: "DB 저장 중...",
-    saved: "자동 저장 완료",
+    saved: "자동 저장 완료 · 실시간 동기화",
     error: "저장 오류 발생",
   }[syncStatus];
 
@@ -1380,7 +1652,7 @@ export default function PlannerWorkspace({
               <button
                 type="button"
                 onClick={() => setPlanGateMode("new")}
-                className="w-full py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition-colors cursor-pointer"
+                className="w-full py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition-colors cursor-pointer shadow-xs"
               >
                 + 새로운 여행 일정 생성하기
               </button>
@@ -1417,6 +1689,7 @@ export default function PlannerWorkspace({
                   type="text"
                   value={newPlanTitle}
                   onChange={(e) => setNewPlanTitle(e.target.value)}
+                  placeholder="예: 11월 제주 우정 여행"
                   className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-xl outline-none focus:border-emerald-500"
                 />
               </div>
@@ -1448,14 +1721,19 @@ export default function PlannerWorkspace({
                 </div>
               </div>
 
+              <div className="rounded-xl bg-emerald-50/70 border border-emerald-200/80 px-3.5 py-2.5 text-xs text-emerald-900 flex items-center justify-between">
+                <span>예상 여행 기간</span>
+                <span className="font-bold">
+                  총 {computeTripDays(newStartDateTime, newEndDateTime).length}일차 일정 생성
+                </span>
+              </div>
+
               <button
                 type="submit"
                 disabled={isCreatingPlan}
                 className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-sm font-semibold rounded-xl transition-colors cursor-pointer"
               >
-                {isCreatingPlan
-                  ? "일정 생성 중..."
-                  : "여행 일정 만들고 사용자 선택으로 이동"}
+                {isCreatingPlan ? "일정 생성 중..." : "여행 일정 만들고 사용자 선택으로 이동"}
               </button>
             </form>
           )}
@@ -1489,10 +1767,7 @@ export default function PlannerWorkspace({
               ) : (
                 <div className="space-y-2 max-h-72 overflow-y-auto">
                   {knownPlans.map((item) => {
-                    const dayCount = computeTripDays(
-                      item.startDateTime,
-                      item.endDateTime
-                    ).length;
+                    const dayCount = computeTripDays(item.startDateTime, item.endDateTime).length;
                     return (
                       <div
                         key={item.id}
@@ -1520,7 +1795,8 @@ export default function PlannerWorkspace({
                         <button
                           type="button"
                           onClick={() => handleRemoveKnownPlan(item.id)}
-                          className="text-xs text-gray-400 hover:text-red-600 px-2 py-1 rounded hover:bg-red-50 cursor-pointer shrink-0"
+                          title="목록에서 제거"
+                          className="text-xs text-gray-400 hover:text-red-600 px-2 py-1 rounded hover:bg-red-50 transition-colors cursor-pointer shrink-0"
                         >
                           제거
                         </button>
@@ -1624,7 +1900,8 @@ export default function PlannerWorkspace({
                       <button
                         type="button"
                         onClick={() => handleDeleteUser(name)}
-                        className="text-xs text-gray-400 hover:text-red-600 px-2 py-1 rounded hover:bg-red-50 cursor-pointer shrink-0"
+                        title={`${name} 삭제`}
+                        className="text-xs text-gray-400 hover:text-red-600 px-2 py-1 rounded hover:bg-red-50 transition-colors cursor-pointer shrink-0"
                       >
                         삭제
                       </button>
@@ -1675,9 +1952,12 @@ export default function PlannerWorkspace({
     );
   }
 
+  const currentDayMeta =
+    tripDays.find((d) => d.dayIndex === activeDayIndex) || tripDays[0];
+
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden">
-      <header className="h-[60px] shrink-0 px-4 md:px-6 border-b border-gray-200 bg-white flex items-center justify-between z-20 gap-3">
+      <header className="h-[60px] shrink-0 px-4 md:px-6 border-b border-gray-200 bg-white flex items-center justify-between z-10 gap-3">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-xl shrink-0" role="img" aria-label="jeju">
             🍊
@@ -1689,6 +1969,7 @@ export default function PlannerWorkspace({
               setShowPlanGate(true);
             }}
             className="text-lg font-bold tracking-tight text-gray-900 hover:text-emerald-700 truncate cursor-pointer text-left"
+            title="다른 여행 일정 선택 또는 생성"
           >
             {planTitle || "제주 여행 플래너"}
           </button>
@@ -1711,6 +1992,7 @@ export default function PlannerWorkspace({
               setShowUserGate(true);
             }}
             className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors cursor-pointer"
+            title="사용자 변경 또는 추가"
           >
             {activeUser ? `👤 ${activeUser}` : "사용자 설정"}
           </button>
@@ -1718,7 +2000,7 @@ export default function PlannerWorkspace({
           <button
             type="button"
             onClick={handleCopyShareLink}
-            className="px-3.5 py-2 text-xs sm:text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors cursor-pointer"
+            className="px-3.5 py-2 text-xs sm:text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 rounded-lg transition-colors cursor-pointer shadow-xs"
           >
             공유 링크 복사
           </button>
@@ -1726,8 +2008,8 @@ export default function PlannerWorkspace({
       </header>
 
       {viewMode === "map" ? (
-        <main className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden">
-          <section className="w-full h-1/2 md:w-[60%] md:h-full relative border-b md:border-b-0 md:border-r border-gray-200 overflow-hidden">
+        <main className="flex-1 flex flex-col md:flex-row h-[calc(100vh-60px)] overflow-hidden">
+          <section className="w-full h-1/2 md:w-[60%] md:h-full relative border-b md:border-b-0 md:border-r border-gray-200">
             <div className="flex items-center gap-1.5 absolute top-4 right-4 z-20">
               <button
                 type="button"
@@ -1738,25 +2020,40 @@ export default function PlannerWorkspace({
                 <span>일정</span>
               </button>
 
-              <div className="hidden sm:flex items-center gap-1 bg-white/95 p-1 rounded-lg shadow-md border border-gray-200 text-xs">
-                {(["full", "compact", "hidden"] as MarkerDisplayMode[]).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => setMarkerDisplayMode(mode)}
-                    className={`px-2.5 py-1.5 rounded-md font-medium transition-colors cursor-pointer ${
-                      markerDisplayMode === mode
-                        ? "bg-emerald-600 text-white"
-                        : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
-                    }`}
-                  >
-                    {mode === "full"
-                      ? "전체"
-                      : mode === "compact"
-                      ? "간략히 보기"
-                      : "숨기기"}
-                  </button>
-                ))}
+              <div className="hidden sm:flex items-center gap-1 bg-white/95 backdrop-blur-xs p-1 rounded-lg shadow-md border border-gray-200 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setMarkerDisplayMode("full")}
+                  className={`px-2.5 py-1.5 rounded-md font-medium transition-colors cursor-pointer ${
+                    markerDisplayMode === "full"
+                      ? "bg-emerald-600 text-white shadow-2xs"
+                      : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+                  }`}
+                >
+                  전체
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMarkerDisplayMode("compact")}
+                  className={`px-2.5 py-1.5 rounded-md font-medium transition-colors cursor-pointer ${
+                    markerDisplayMode === "compact"
+                      ? "bg-emerald-600 text-white shadow-2xs"
+                      : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+                  }`}
+                >
+                  간략히 보기
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMarkerDisplayMode("hidden")}
+                  className={`px-2.5 py-1.5 rounded-md font-medium transition-colors cursor-pointer ${
+                    markerDisplayMode === "hidden"
+                      ? "bg-emerald-600 text-white shadow-2xs"
+                      : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+                  }`}
+                >
+                  숨기기
+                </button>
               </div>
             </div>
 
@@ -1769,7 +2066,7 @@ export default function PlannerWorkspace({
                   type="text"
                   value={searchKeyword}
                   onChange={(e) => setSearchKeyword(e.target.value)}
-                  placeholder="장소·명소·상호 검색 (예: 협재해수욕장)"
+                  placeholder="장소·명소·상호 검색 (예: 협재해수욕장, 성산일출봉)"
                   className="flex-1 px-3 py-2.5 text-sm outline-none text-gray-800"
                 />
                 <button
@@ -1791,8 +2088,7 @@ export default function PlannerWorkspace({
               {searchResults.length > 0 && (
                 <ul className="mt-1.5 bg-white rounded-lg shadow-lg border border-gray-200 divide-y divide-gray-100 max-h-60 overflow-y-auto">
                   {searchResults.map((item, idx) => {
-                    const inferred =
-                      CATEGORY_STYLES[inferCategoryType(item.category, item.title)];
+                    const inferred = CATEGORY_STYLES[inferCategoryType(item.category, item.title)];
                     return (
                       <li
                         key={`${item.title}-${idx}`}
@@ -1800,9 +2096,7 @@ export default function PlannerWorkspace({
                         className="p-3 hover:bg-emerald-50 cursor-pointer transition-colors"
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="font-semibold text-sm text-gray-900">
-                            {item.title}
-                          </span>
+                          <span className="font-semibold text-sm text-gray-900">{item.title}</span>
                           <span
                             className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${inferred.badgeBg}`}
                           >
@@ -1834,52 +2128,62 @@ export default function PlannerWorkspace({
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-4 gap-1.5">
-                    {CATEGORY_ORDER.map((catKey) => {
-                      const cStyle = CATEGORY_STYLES[catKey];
-                      const active = draftCategory === catKey;
-                      return (
-                        <button
-                          key={catKey}
-                          type="button"
-                          onClick={() => setDraftCategory(catKey)}
-                          className={`py-1.5 px-1 rounded-lg border text-[11px] font-semibold flex flex-col items-center justify-center gap-0.5 cursor-pointer ${
-                            active
-                              ? `${cStyle.badgeBg} ring-2 ring-offset-1 ring-gray-400`
-                              : "bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100"
-                          }`}
-                        >
-                          <span>{cStyle.icon}</span>
-                          <span>{cStyle.label}</span>
-                        </button>
-                      );
-                    })}
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1.5">카테고리 꼬리표</label>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {CATEGORY_ORDER.map((catKey) => {
+                        const cStyle = CATEGORY_STYLES[catKey];
+                        const active = draftCategory === catKey;
+                        return (
+                          <button
+                            key={catKey}
+                            type="button"
+                            onClick={() => setDraftCategory(catKey)}
+                            className={`py-1.5 px-1 rounded-lg border text-[11px] font-semibold flex flex-col items-center justify-center gap-0.5 transition-all cursor-pointer ${
+                              active
+                                ? `${cStyle.badgeBg} ring-2 ring-offset-1 ring-gray-400`
+                                : "bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100"
+                            }`}
+                          >
+                            <span>{cStyle.icon}</span>
+                            <span>{cStyle.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
 
-                  <input
-                    type="text"
-                    value={draftTitle}
-                    onChange={(e) => setDraftTitle(e.target.value)}
-                    placeholder="장소명"
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg outline-none focus:border-emerald-500"
-                  />
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">장소명</label>
+                    <input
+                      type="text"
+                      value={draftTitle}
+                      onChange={(e) => setDraftTitle(e.target.value)}
+                      placeholder="장소명을 확인하거나 수정하세요"
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg outline-none focus:border-emerald-500"
+                    />
+                  </div>
 
-                  <input
-                    type="text"
-                    value={draftMemo}
-                    onChange={(e) => setDraftMemo(e.target.value)}
-                    placeholder="메모 (선택)"
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg outline-none focus:border-emerald-500"
-                  />
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">메모</label>
+                    <input
+                      type="text"
+                      value={draftMemo}
+                      onChange={(e) => setDraftMemo(e.target.value)}
+                      placeholder="메모를 바로 입력하세요 (선택)"
+                      autoFocus
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg outline-none focus:border-emerald-500"
+                    />
+                  </div>
 
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center justify-between gap-2 pt-0.5">
                     <button
                       type="button"
                       onClick={() => setDraftMustVisit((prev) => !prev)}
-                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold cursor-pointer ${
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
                         draftMustVisit
-                          ? "bg-amber-50 text-amber-800 border-amber-300"
-                          : "bg-gray-50 text-gray-600 border-gray-200"
+                          ? "bg-amber-50 text-amber-800 border-amber-300 ring-1 ring-amber-300"
+                          : "bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100"
                       }`}
                     >
                       <span>{draftMustVisit ? "⭐" : "☆"}</span>
@@ -1894,7 +2198,7 @@ export default function PlannerWorkspace({
                       )}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-xs font-medium text-emerald-700 underline"
+                      className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-900 underline underline-offset-2 shrink-0"
                     >
                       네이버 지도 ↗
                     </a>
@@ -1902,35 +2206,22 @@ export default function PlannerWorkspace({
 
                   <button
                     type="submit"
-                    className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg cursor-pointer"
+                    className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer"
                   >
-                    일정에 추가하고 저장
+                    일정에 추가하고 자동 저장
                   </button>
                 </form>
               )}
             </div>
 
-            {mapAuthError ? (
-              <div className="w-full h-full bg-gray-100 flex flex-col items-center justify-center p-6 text-center space-y-2">
-                <p className="text-sm font-semibold text-gray-800">
-                  네이버 지도 API 인증이 완료되지 않았습니다.
-                </p>
-                <p className="text-xs text-gray-500 max-w-sm">
-                  네이버 클라우드 플랫폼 콘솔의 Web 서비스 URL(현재 접속 주소)과
-                  클라이언트 키 설정을 확인해 주세요. 검색 및 장소 추가·일정 관리는
-                  아래 목록에서 계속 이용할 수 있습니다.
-                </p>
-              </div>
-            ) : (
-              <div id="map" className="w-full h-full bg-gray-200" />
-            )}
+            <div id="map" className="w-full h-full bg-gray-200" />
           </section>
 
           <section className="w-full h-1/2 md:w-[40%] md:h-full overflow-y-auto bg-white p-6 md:p-10">
             <div className="max-w-2xl mx-auto">
               {selectedPlace && selectedCategoryStyle && (
                 <div
-                  className={`mb-6 p-4 rounded-2xl border-2 shadow-sm space-y-2.5 ${selectedCategoryStyle.cardBorder} ${selectedCategoryStyle.cardSelectedBg}`}
+                  className={`mb-6 p-4 rounded-2xl border-2 shadow-sm space-y-2.5 relative ${selectedCategoryStyle.cardBorder} ${selectedCategoryStyle.cardSelectedBg}`}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
@@ -1940,6 +2231,11 @@ export default function PlannerWorkspace({
                         <span>{selectedCategoryStyle.icon}</span>
                         <span>{selectedCategoryStyle.label}</span>
                       </span>
+                      {selectedPlace.isMustVisit && (
+                        <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200 text-[11px] font-bold">
+                          ⭐ 꼭 가고 싶은 곳
+                        </span>
+                      )}
                       <span className="text-xs font-semibold text-gray-600">
                         #{selectedIndex + 1}
                       </span>
@@ -1947,29 +2243,44 @@ export default function PlannerWorkspace({
                     <button
                       type="button"
                       onClick={resetSelectionAndViewport}
-                      className="text-xs font-medium text-gray-700 bg-white px-2.5 py-1 rounded-md border border-gray-200 cursor-pointer"
+                      className="text-xs font-medium text-gray-700 hover:text-gray-950 bg-white/90 px-2.5 py-1 rounded-md border border-gray-200 cursor-pointer"
                     >
-                      닫기
+                      원위치로 닫기
                     </button>
                   </div>
 
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1">
-                      <h2 className="text-lg font-bold text-gray-900">
-                        {selectedPlace.title}
-                      </h2>
+                      <h2 className="text-lg font-bold text-gray-900">{selectedPlace.title}</h2>
                       <input
                         type="text"
-                        value={memoDrafts[selectedPlace.id] ?? selectedPlace.memo}
+                        value={selectedPlace.memo}
                         onChange={(e) => handleUpdateMemo(selectedPlace.id, e.target.value)}
                         placeholder="멘트를 입력해 보세요..."
                         className="w-full text-sm text-gray-700 mt-1.5 px-2.5 py-1.5 rounded-lg bg-white border border-gray-200 focus:border-emerald-500 outline-none"
                       />
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <a
+                          href={buildNaverMapCoordUrl(
+                            selectedPlace.title,
+                            selectedPlace.lat,
+                            selectedPlace.lng
+                          )}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:text-emerald-900 underline underline-offset-2"
+                        >
+                          네이버 지도에서 열기 ↗
+                        </a>
+                        <span className="text-[11px] text-gray-400 select-none">
+                          by {selectedPlace.createdBy || "익명"}
+                        </span>
+                      </div>
                     </div>
                     <button
                       type="button"
                       onClick={() => handleDeletePlace(selectedPlace.id)}
-                      className="text-xs text-red-600 hover:text-red-700 font-medium px-2 py-1 rounded cursor-pointer"
+                      className="text-xs text-red-600 hover:text-red-700 font-medium px-2 py-1 rounded cursor-pointer shrink-0"
                     >
                       삭제
                     </button>
@@ -1983,14 +2294,13 @@ export default function PlannerWorkspace({
                     type="text"
                     value={planTitle}
                     onChange={(e) => {
-                      const nextTitle = e.target.value;
-                      setPlanTitle(nextTitle);
-                      commitPlanState({ title: nextTitle });
+                      hasUserMutatedRef.current = true;
+                      setPlanTitle(e.target.value);
                     }}
                     className="w-full text-2xl font-bold text-gray-900 tracking-tight border-b border-transparent hover:border-gray-200 focus:border-emerald-500 outline-none pb-1"
                   />
                   <p className="text-sm text-gray-500 mt-1">
-                    카테고리나 ⭐ 표시로 필터링하고 상태를 바꿀 수 있습니다.
+                    카테고리 아이콘이나 ⭐ 표시를 눌러 필터링하고 상태를 바꿀 수 있습니다.
                   </p>
                 </div>
 
@@ -2001,9 +2311,9 @@ export default function PlannerWorkspace({
                       setSelectedUserFilter(null);
                       setIsUserFilterOpen(false);
                     }}
-                    className={`px-2.5 py-1 rounded-md font-medium cursor-pointer ${
+                    className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
                       selectedUserFilter === null
-                        ? "bg-white text-gray-900"
+                        ? "bg-white text-gray-900 shadow-2xs"
                         : "text-gray-500 hover:text-gray-800"
                     }`}
                   >
@@ -2012,13 +2322,14 @@ export default function PlannerWorkspace({
                   <button
                     type="button"
                     onClick={() => setIsUserFilterOpen((prev) => !prev)}
-                    className={`px-2.5 py-1 rounded-md font-medium cursor-pointer ${
+                    className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer inline-flex items-center gap-1 ${
                       selectedUserFilter !== null
-                        ? "bg-white text-emerald-700 font-semibold"
+                        ? "bg-white text-emerald-700 shadow-2xs font-semibold"
                         : "text-gray-500 hover:text-gray-800"
                     }`}
                   >
-                    {selectedUserFilter ? `👤 ${selectedUserFilter}` : "이름 선택"} ▾
+                    <span>{selectedUserFilter ? `👤 ${selectedUserFilter}` : "이름 선택"}</span>
+                    <span className="text-[10px]">▾</span>
                   </button>
 
                   {isUserFilterOpen && (
@@ -2029,23 +2340,38 @@ export default function PlannerWorkspace({
                           setSelectedUserFilter(null);
                           setIsUserFilterOpen(false);
                         }}
-                        className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs text-gray-700 hover:bg-gray-100 cursor-pointer"
+                        className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-colors cursor-pointer ${
+                          selectedUserFilter === null
+                            ? "bg-emerald-50 text-emerald-700 font-semibold"
+                            : "text-gray-700 hover:bg-gray-100"
+                        }`}
                       >
                         전체 보기
                       </button>
-                      {filterableUsers.map((userName) => (
-                        <button
-                          key={userName}
-                          type="button"
-                          onClick={() => {
-                            setSelectedUserFilter(userName);
-                            setIsUserFilterOpen(false);
-                          }}
-                          className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs text-gray-700 hover:bg-gray-100 cursor-pointer"
-                        >
-                          {userName}
-                        </button>
-                      ))}
+                      {filterableUsers.length === 0 ? (
+                        <div className="px-2.5 py-1.5 text-[11px] text-gray-400">
+                          등록된 사용자 없음
+                        </div>
+                      ) : (
+                        filterableUsers.map((userName) => (
+                          <button
+                            key={userName}
+                            type="button"
+                            onClick={() => {
+                              setSelectedUserFilter(userName);
+                              setIsUserFilterOpen(false);
+                            }}
+                            className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-colors cursor-pointer flex items-center justify-between ${
+                              selectedUserFilter === userName
+                                ? "bg-emerald-50 text-emerald-700 font-semibold"
+                                : "text-gray-700 hover:bg-gray-100"
+                            }`}
+                          >
+                            <span>{userName}</span>
+                            {selectedUserFilter === userName && <span>✓</span>}
+                          </button>
+                        ))
+                      )}
                     </div>
                   )}
                 </div>
@@ -2054,14 +2380,11 @@ export default function PlannerWorkspace({
               <div className="mb-6 flex items-center gap-1.5 flex-wrap">
                 <button
                   type="button"
-                  onClick={() => {
-                    setSelectedCategories([]);
-                    setOnlyMustVisitFilter(false);
-                  }}
-                  className={`px-2.5 py-1 rounded-full border text-xs font-semibold cursor-pointer ${
+                  onClick={handleResetAllCategoryFilters}
+                  className={`px-2.5 py-1 rounded-full border text-xs font-semibold transition-colors cursor-pointer ${
                     isAllFilterActive
                       ? "bg-gray-900 text-white border-gray-900"
-                      : "bg-white text-gray-600 border-gray-200"
+                      : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
                   }`}
                 >
                   전체
@@ -2073,17 +2396,11 @@ export default function PlannerWorkspace({
                     <button
                       key={catKey}
                       type="button"
-                      onClick={() =>
-                        setSelectedCategories((prev) =>
-                          prev.includes(catKey)
-                            ? prev.filter((item) => item !== catKey)
-                            : [...prev, catKey]
-                        )
-                      }
-                      className={`px-2.5 py-1 rounded-full border text-xs font-semibold inline-flex items-center gap-1 cursor-pointer ${
+                      onClick={() => handleToggleCategoryFilter(catKey)}
+                      className={`px-2.5 py-1 rounded-full border text-xs font-semibold inline-flex items-center gap-1 transition-all cursor-pointer ${
                         isSelectedCat
                           ? `${cStyle.badgeBg} ring-2 ring-offset-1 ring-gray-300`
-                          : "bg-white text-gray-600 border-gray-200"
+                          : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
                       }`}
                     >
                       <span>{cStyle.icon}</span>
@@ -2091,13 +2408,15 @@ export default function PlannerWorkspace({
                     </button>
                   );
                 })}
+
                 <button
                   type="button"
                   onClick={() => setOnlyMustVisitFilter((prev) => !prev)}
-                  className={`px-2.5 py-1 rounded-full border text-xs font-semibold cursor-pointer ${
+                  title="꼭 가고 싶은 곳만 보기"
+                  className={`px-2.5 py-1 rounded-full border text-xs font-semibold inline-flex items-center justify-center transition-all cursor-pointer ${
                     onlyMustVisitFilter
-                      ? "bg-amber-100 text-amber-800 border-amber-300"
-                      : "bg-white text-gray-600 border-gray-200"
+                      ? "bg-amber-100 text-amber-800 border-amber-300 ring-2 ring-offset-1 ring-amber-300"
+                      : "bg-white text-gray-600 border-gray-200 hover:bg-amber-50/60"
                   }`}
                 >
                   ⭐
@@ -2124,8 +2443,8 @@ export default function PlannerWorkspace({
                         onClick={() => handleSelectPin(p)}
                         className={`p-4 pb-3 rounded-xl border transition-all flex items-start justify-between gap-4 cursor-pointer relative ${
                           isSelected
-                            ? `${cStyle.cardBorder} ${cStyle.cardSelectedBg} ring-2 ring-offset-1 ring-gray-200`
-                            : `${cStyle.cardBorder} ${cStyle.cardHoverBorder} bg-white`
+                            ? `${cStyle.cardBorder} ${cStyle.cardSelectedBg} ring-2 ring-offset-1 ring-gray-200 shadow-xs`
+                            : `${cStyle.cardBorder} ${cStyle.cardHoverBorder} bg-white shadow-xs`
                         }`}
                       >
                         <div className="flex items-start gap-3 flex-1 min-w-0">
@@ -2147,11 +2466,10 @@ export default function PlannerWorkspace({
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setEditingCategoryPlaceId((prev) =>
-                                    prev === p.id ? null : p.id
-                                  );
+                                  setEditingCategoryPlaceId((prev) => (prev === p.id ? null : p.id));
                                 }}
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-semibold cursor-pointer ${cStyle.badgeBg}`}
+                                title="카테고리 변경하기"
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-semibold shrink-0 transition-transform active:scale-95 cursor-pointer ${cStyle.badgeBg}`}
                               >
                                 <span>{cStyle.icon}</span>
                                 <span>{cStyle.label}</span>
@@ -2163,10 +2481,15 @@ export default function PlannerWorkspace({
                                   e.stopPropagation();
                                   handleTogglePlaceMustVisit(p.id);
                                 }}
-                                className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded-full border text-[11px] cursor-pointer ${
+                                title={
+                                  p.isMustVisit
+                                    ? "꼭 가고 싶은 곳 해제"
+                                    : "꼭 가고 싶은 곳으로 표시"
+                                }
+                                className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded-full border text-[11px] transition-transform active:scale-95 cursor-pointer shrink-0 ${
                                   p.isMustVisit
                                     ? "bg-amber-100 text-amber-800 border-amber-300"
-                                    : "bg-gray-50 text-gray-400 border-gray-200"
+                                    : "bg-gray-50 text-gray-400 border-gray-200 hover:text-amber-500 hover:border-amber-200"
                                 }`}
                               >
                                 {p.isMustVisit ? "⭐" : "☆"}
@@ -2179,14 +2502,20 @@ export default function PlannerWorkspace({
                                 >
                                   {CATEGORY_ORDER.map((catKey) => {
                                     const optionStyle = CATEGORY_STYLES[catKey];
+                                    const isCurrent = cat === catKey;
                                     return (
                                       <button
                                         key={catKey}
                                         type="button"
                                         onClick={() => handleChangePlaceCategory(p.id, catKey)}
-                                        className="px-2 py-1 rounded-lg text-[11px] font-semibold hover:bg-gray-100 text-gray-700 cursor-pointer"
+                                        className={`px-2 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer ${
+                                          isCurrent
+                                            ? `${optionStyle.badgeBg} ring-1 ring-gray-400`
+                                            : "hover:bg-gray-100 text-gray-700"
+                                        }`}
                                       >
-                                        {optionStyle.icon} {optionStyle.label}
+                                        <span>{optionStyle.icon}</span>
+                                        <span>{optionStyle.label}</span>
                                       </button>
                                     );
                                   })}
@@ -2196,33 +2525,33 @@ export default function PlannerWorkspace({
 
                             <input
                               type="text"
-                              value={memoDrafts[p.id] ?? p.memo}
+                              value={p.memo}
                               onChange={(e) => handleUpdateMemo(p.id, e.target.value)}
                               placeholder="멘트를 입력해 보세요..."
-                              className="w-full text-xs text-gray-600 mt-1.5 px-2 py-1 rounded border border-transparent hover:border-gray-200 focus:border-emerald-400 outline-none"
+                              className="w-full text-xs text-gray-600 mt-1.5 px-2 py-1 rounded border border-transparent hover:border-gray-200 focus:border-emerald-400 focus:bg-emerald-50/30 outline-none transition-colors"
                             />
                             <div className="mt-2 pt-1.5 border-t border-gray-100 flex items-center justify-between gap-2 px-2">
                               <a
                                 href={buildNaverMapCoordUrl(p.title, p.lat, p.lng)}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 hover:text-emerald-900 underline"
+                                className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 hover:text-emerald-900 underline underline-offset-2"
                               >
                                 네이버 지도 링크 ↗
                               </a>
-                              <span className="text-[10px] text-gray-400">
+                              <span className="text-[10px] tracking-tight text-gray-400/90 select-none">
                                 {p.createdBy || "익명"}
                               </span>
                             </div>
                           </div>
                         </div>
-
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
                             handleDeletePlace(p.id);
                           }}
-                          className="text-gray-400 hover:text-red-500 text-sm px-2 py-1 rounded cursor-pointer shrink-0"
+                          className="text-gray-400 hover:text-red-500 text-sm px-2 py-1 rounded transition-colors cursor-pointer shrink-0"
+                          title="삭제"
                         >
                           삭제
                         </button>
@@ -2235,8 +2564,8 @@ export default function PlannerWorkspace({
           </section>
         </main>
       ) : (
-        <main className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden bg-gray-50/60">
-          <section className="w-full h-3/5 md:w-[60%] md:h-full flex flex-col border-b md:border-b-0 md:border-r border-gray-200 bg-white min-h-0 overflow-hidden">
+        <main className="flex-1 flex flex-col md:flex-row h-[calc(100vh-60px)] overflow-hidden bg-gray-50/60">
+          <section className="w-full h-3/5 md:w-[60%] md:h-full flex flex-col border-b md:border-b-0 md:border-r border-gray-200 bg-white relative">
             <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between gap-3 shrink-0">
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
@@ -2246,9 +2575,7 @@ export default function PlannerWorkspace({
                   {currentDayMeta?.dateLabel && (
                     <span className="text-sm font-semibold text-gray-800">
                       {currentDayMeta.dateLabel}
-                      {currentDayMeta.weekdayLabel
-                        ? ` (${currentDayMeta.weekdayLabel})`
-                        : ""}
+                      {currentDayMeta.weekdayLabel ? ` (${currentDayMeta.weekdayLabel})` : ""}
                     </span>
                   )}
                   <span className="text-xs text-gray-400">
@@ -2256,22 +2583,21 @@ export default function PlannerWorkspace({
                   </span>
                 </div>
                 <p className="text-xs text-gray-500 mt-1">
-                  시간대를 고른 뒤 우측 저장된 장소 카드를 클릭하면 {activeDayIndex}일차
-                  시간표에 추가됩니다.
+                  시간대를 고른 뒤 우측 저장된 장소 카드를 클릭하면 {activeDayIndex}일차 시간표에 추가됩니다.
                 </p>
               </div>
 
               <button
                 type="button"
                 onClick={() => setViewMode("map")}
-                className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5 shrink-0"
+                className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer inline-flex items-center gap-1.5 shrink-0"
               >
                 <span>🗺️</span>
                 <span>지도로 돌아가기</span>
               </button>
             </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-2">
+            <div className="flex-1 overflow-y-auto px-5 py-4 pb-24 space-y-2">
               {TIME_SLOTS.map((slot) => {
                 const slotItems = currentDayScheduleItems.filter(
                   (it) => it.timeSlot === slot
@@ -2288,7 +2614,7 @@ export default function PlannerWorkspace({
                         : "border-gray-100 bg-white hover:border-gray-200"
                     }`}
                   >
-                    <div className="w-14 shrink-0 pt-1">
+                    <div className="w-14 shrink-0 pt-1 flex flex-col items-start">
                       <span
                         className={`text-xs font-bold tabular-nums ${
                           isSelectedSlot ? "text-emerald-700" : "text-gray-500"
@@ -2296,6 +2622,11 @@ export default function PlannerWorkspace({
                       >
                         {slot}
                       </span>
+                      {isSelectedSlot && (
+                        <span className="text-[10px] text-emerald-600 font-semibold mt-0.5">
+                          선택됨
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex-1 min-w-0 space-y-1.5">
@@ -2322,6 +2653,11 @@ export default function PlannerWorkspace({
                                   >
                                     {cStyle.icon} {cStyle.label}
                                   </span>
+                                  {sc.isMustVisit && (
+                                    <span className="text-[11px] font-bold text-amber-700">
+                                      ⭐
+                                    </span>
+                                  )}
                                   <span className="text-sm font-semibold text-gray-900 truncate">
                                     {sc.title}
                                   </span>
@@ -2339,6 +2675,7 @@ export default function PlannerWorkspace({
                                   onChange={(e) =>
                                     handleUpdateScheduleItemSlot(sc.id, e.target.value)
                                   }
+                                  aria-label="시간대 변경"
                                   className="text-[11px] border border-gray-200 rounded-md px-1.5 py-1 bg-white text-gray-700 cursor-pointer"
                                 >
                                   {TIME_SLOTS.map((t) => (
@@ -2351,6 +2688,7 @@ export default function PlannerWorkspace({
                                   type="button"
                                   onClick={() => handleRemoveScheduleItem(sc.id)}
                                   className="text-xs text-gray-400 hover:text-red-600 px-1.5 py-1 rounded cursor-pointer"
+                                  title="시간표에서 제거"
                                 >
                                   ✕
                                 </button>
@@ -2365,48 +2703,46 @@ export default function PlannerWorkspace({
               })}
             </div>
 
-            <div className="shrink-0 border-t border-gray-200 bg-white px-4 py-2.5 flex items-center justify-center z-20">
-              <div className="bg-gray-50 border border-gray-200 rounded-full px-3 py-1.5 flex items-center gap-1.5 max-w-full">
-                <button
-                  type="button"
-                  disabled={activeDayIndex <= 1}
-                  onClick={() => setActiveDayIndex((prev) => Math.max(1, prev - 1))}
-                  className="px-2.5 py-1 rounded-full text-xs font-semibold text-gray-700 hover:bg-gray-200/70 disabled:opacity-35 disabled:pointer-events-none cursor-pointer shrink-0"
-                >
-                  ◀ 이전
-                </button>
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 bg-white/95 backdrop-blur-xs border border-gray-200 shadow-lg rounded-full px-3 py-1.5 flex items-center gap-1.5 max-w-[95%]">
+              <button
+                type="button"
+                disabled={activeDayIndex <= 1}
+                onClick={() => setActiveDayIndex((prev) => Math.max(1, prev - 1))}
+                className="px-2.5 py-1 rounded-full text-xs font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-35 disabled:pointer-events-none cursor-pointer"
+              >
+                ◀ 이전
+              </button>
 
-                <div className="flex items-center gap-1 overflow-x-auto max-w-[220px] sm:max-w-[360px] px-1">
-                  {tripDays.map((day) => {
-                    const isCurrentDay = day.dayIndex === activeDayIndex;
-                    return (
-                      <button
-                        key={day.dayIndex}
-                        type="button"
-                        onClick={() => setActiveDayIndex(day.dayIndex)}
-                        className={`px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap cursor-pointer ${
-                          isCurrentDay
-                            ? "bg-emerald-600 text-white"
-                            : "text-gray-600 hover:bg-gray-200/70"
-                        }`}
-                      >
-                        {day.dayIndex}일차
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <button
-                  type="button"
-                  disabled={activeDayIndex >= tripDays.length}
-                  onClick={() =>
-                    setActiveDayIndex((prev) => Math.min(tripDays.length, prev + 1))
-                  }
-                  className="px-2.5 py-1 rounded-full text-xs font-semibold text-gray-700 hover:bg-gray-200/70 disabled:opacity-35 disabled:pointer-events-none cursor-pointer shrink-0"
-                >
-                  다음 ▶
-                </button>
+              <div className="flex items-center gap-1 overflow-x-auto max-w-[220px] sm:max-w-[340px] px-1">
+                {tripDays.map((day) => {
+                  const isCurrentDay = day.dayIndex === activeDayIndex;
+                  return (
+                    <button
+                      key={day.dayIndex}
+                      type="button"
+                      onClick={() => setActiveDayIndex(day.dayIndex)}
+                      className={`px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
+                        isCurrentDay
+                          ? "bg-emerald-600 text-white shadow-2xs"
+                          : "text-gray-600 hover:bg-gray-100"
+                      }`}
+                    >
+                      {day.dayIndex}일차
+                    </button>
+                  );
+                })}
               </div>
+
+              <button
+                type="button"
+                disabled={activeDayIndex >= tripDays.length}
+                onClick={() =>
+                  setActiveDayIndex((prev) => Math.min(tripDays.length, prev + 1))
+                }
+                className="px-2.5 py-1 rounded-full text-xs font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-35 disabled:pointer-events-none cursor-pointer"
+              >
+                다음 ▶
+              </button>
             </div>
           </section>
 
@@ -2428,8 +2764,8 @@ export default function PlannerWorkspace({
 
               {visiblePlaces.length === 0 ? (
                 <div className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center text-sm text-gray-400">
-                  아직 저장된 장소가 없습니다. ‘지도로 돌아가기’를 눌러 장소를
-                  먼저 저장해 보세요!
+                  아직 저장된 장소가 없습니다. &lsquo;지도로 돌아가기&rsquo;를 눌러 장소를 먼저
+                  저장해 보세요!
                 </div>
               ) : (
                 <div className="space-y-2.5">
@@ -2439,14 +2775,13 @@ export default function PlannerWorkspace({
                     const addedCountToday = currentDayScheduleItems.filter(
                       (sc) => sc.placeId === place.id
                     ).length;
-                    const currentMemo = memoDrafts[place.id] ?? place.memo;
 
                     return (
                       <button
                         key={place.id}
                         type="button"
                         onClick={() => handleAddPlaceToDaySchedule(place)}
-                        className={`w-full text-left p-3.5 rounded-xl border ${cStyle.cardBorder} ${cStyle.cardHoverBorder} bg-white hover:bg-emerald-50/30 transition-all cursor-pointer space-y-1.5`}
+                        className={`w-full text-left p-3.5 rounded-xl border ${cStyle.cardBorder} ${cStyle.cardHoverBorder} bg-white hover:bg-emerald-50/30 transition-all cursor-pointer shadow-2xs space-y-1.5`}
                       >
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-1.5 flex-wrap min-w-0">
@@ -2455,17 +2790,25 @@ export default function PlannerWorkspace({
                             >
                               {cStyle.icon} {cStyle.label}
                             </span>
+                            {place.isMustVisit && (
+                              <span className="text-xs font-bold text-amber-600 shrink-0">
+                                ⭐
+                              </span>
+                            )}
                             <span className="font-semibold text-sm text-gray-900 truncate">
                               {place.title}
                             </span>
                           </div>
+
                           <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md shrink-0">
                             + {activeDayIndex}일차 추가
                           </span>
                         </div>
 
-                        {currentMemo && (
-                          <p className="text-xs text-gray-600 line-clamp-2">{currentMemo}</p>
+                        {place.memo && (
+                          <p className="text-xs text-gray-600 line-clamp-2 pl-0.5">
+                            {place.memo}
+                          </p>
                         )}
 
                         <div className="pt-1 flex items-center justify-between text-[11px] text-gray-400">
