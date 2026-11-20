@@ -400,7 +400,6 @@ function buildNaverMapCoordUrl(title: string, lat: number, lng: number): string 
   return `https://map.naver.com/v5/?c=${lng},${lat},16,0,0,0,dh`;
 }
 
-// planId가 있을 때만 플랜별 키를 사용하고, 없을 때는 임시 키를 사용
 function getMemberStorageKey(id?: string): string {
   return id ? `jeju_planner_members_plan_${id}` : "jeju_planner_members_draft";
 }
@@ -507,7 +506,6 @@ function saveStoredDeletedMembers(id: string | undefined, list: string[]): void 
   }
 }
 
-// 현재 플랜의 멤버 목록만 병합 (다른 플랜의 사용자와 절대 섞이지 않음)
 function mergePlanMembers(
   planMembers: string[] = [],
   planPlaces: PlaceItem[] = [],
@@ -541,7 +539,6 @@ export default function PlannerWorkspace({
     initialDeleted
   );
 
-  // 1단계: 여행 일정 선택 / 생성 게이트
   const [showPlanGate, setShowPlanGate] = useState<boolean>(() => !planId);
   const [planGateMode, setPlanGateMode] = useState<PlanGateMode>("choose");
   const [knownPlans, setKnownPlans] = useState<PlanSummaryItem[]>(() => loadKnownPlans());
@@ -550,7 +547,6 @@ export default function PlannerWorkspace({
   const [newEndDateTime, setNewEndDateTime] = useState(FALLBACK_END_DT);
   const [isCreatingPlan, setIsCreatingPlan] = useState(false);
 
-  // 선택된 여행 일정 데이터
   const [currentPlanId, setCurrentPlanId] = useState<string | undefined>(planId);
   const [planTitle, setPlanTitle] = useState(initialTitle);
   const [places, setPlaces] = useState<PlaceItem[]>(initialParsed.parsedPlaces);
@@ -574,18 +570,15 @@ export default function PlannerWorkspace({
     setNewEndDateTime(range.endDateTime);
   }, []);
 
-  // 2단계: 사용자 선택 / 등록 게이트
   const [activeUser, setActiveUser] = useState<string | null>(null);
   const [userGateMode, setUserGateMode] = useState<UserGateMode>("choose");
   const [newUserName, setNewUserName] = useState("");
   const [showUserGate, setShowUserGate] = useState<boolean>(Boolean(planId));
 
-  // 뷰 전환 ("map" | "schedule") 및 시간표 일차 상태
   const [viewMode, setViewMode] = useState<WorkspaceViewMode>("map");
   const [activeDayIndex, setActiveDayIndex] = useState<number>(1);
   const [selectedTimeSlot, setSelectedTimeSlot] = useState<string>("09:00");
 
-  // 지도 / 장소 검색 / 필터 상태
   const [mapInstance, setMapInstance] = useState<any>(null);
   const [markersRef, setMarkersRef] = useState<any[]>([]);
   const [selectedPlaceId, setSelectedPlaceId] = useState<number | null>(null);
@@ -700,11 +693,9 @@ export default function PlannerWorkspace({
     }
   }, [showPlanGate, planGateMode, refreshAllPlansList]);
 
-  // 특정 planId의 데이터만 독립적으로 불러오기 (다른 플랜과 절대 섞지 않음)
   const hydratePlanFromServer = useCallback(async (targetId?: string) => {
     if (!targetId) return;
 
-    // 이전 플랜 상태 초기화
     setPlaces([]);
     setScheduleConfig({
       startDateTime: FALLBACK_START_DT,
@@ -982,7 +973,6 @@ export default function PlannerWorkspace({
     setShowUserGate(true);
   };
 
-  // DB와 로컬 목록에서 일정을 완전히 삭제
   const handleRemoveKnownPlan = async (targetId: string) => {
     try {
       const { error } = await supabase
@@ -1138,20 +1128,34 @@ export default function PlannerWorkspace({
     }
   }, [resetSelectionAndViewport]);
 
+  // viewMode === "map"일 때만 지도를 생성하고, 일정 모드 전환 시 완전히 해제
   useEffect(() => {
-    if (showPlanGate || showUserGate || viewMode !== "map") return;
+    if (showPlanGate || showUserGate || viewMode !== "map") {
+      markersRef.forEach((m) => {
+        try {
+          m.setMap(null);
+        } catch {
+          // 무시
+        }
+      });
+      setMarkersRef([]);
+      setMapInstance(null);
+      return;
+    }
 
-    setMapInstance(null);
-    setMarkersRef([]);
+    let cancelled = false;
 
     const initMap = () => {
+      if (cancelled) return;
+      const mapEl = document.getElementById("map");
+      if (!mapEl) return;
       if (window.naver && window.naver.maps) {
         const firstPlace = visiblePlaces[0];
         const centerLat = firstPlace ? firstPlace.lat : 33.3846;
         const centerLng = firstPlace ? firstPlace.lng : 126.5535;
         const zoomLevel = firstPlace ? 12 : 10;
 
-        const map = new window.naver.maps.Map("map", {
+        const map = new window.naver.maps.Map(mapEl, {
           center: new window.naver.maps.LatLng(centerLat, centerLng),
           zoom: zoomLevel,
         });
@@ -1168,21 +1172,28 @@ export default function PlannerWorkspace({
           initMap();
         }
       }, 100);
-      return () => clearInterval(checkInterval);
+      return () => {
+        cancelled = true;
+        clearInterval(checkInterval);
+      };
     }
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showPlanGate, showUserGate, viewMode]);
 
   useEffect(() => {
-    if (!mapInstance || !window.naver) return;
+    if (!mapInstance || !window.naver || viewMode !== "map") return;
     const listener = window.naver.maps.Event.addListener(mapInstance, "click", handleMapClick);
     return () => {
       window.naver.maps.Event.removeListener(listener);
     };
-  }, [mapInstance, handleMapClick]);
+  }, [mapInstance, viewMode, handleMapClick]);
 
   useEffect(() => {
-    if (!mapInstance || !window.naver) return;
+    if (!mapInstance || !window.naver || viewMode !== "map") return;
 
     markersRef.forEach((m) => m.setMap(null));
 
@@ -1312,6 +1323,7 @@ export default function PlannerWorkspace({
   }, [
     places,
     mapInstance,
+    viewMode,
     selectedPlaceId,
     markerDisplayMode,
     selectedCategories,
@@ -1893,7 +1905,7 @@ export default function PlannerWorkspace({
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden">
-      <header className="h-[60px] shrink-0 px-4 md:px-6 border-b border-gray-200 bg-white flex items-center justify-between z-10 gap-3">
+      <header className="h-[60px] shrink-0 px-4 md:px-6 border-b border-gray-200 bg-white flex items-center justify-between z-20 gap-3">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-xl shrink-0" role="img" aria-label="jeju">
             🍊
@@ -1944,8 +1956,8 @@ export default function PlannerWorkspace({
       </header>
 
       {viewMode === "map" ? (
-        <main className="flex-1 flex flex-col md:flex-row h-[calc(100vh-60px)] overflow-hidden">
-          <section className="w-full h-1/2 md:w-[60%] md:h-full relative border-b md:border-b-0 md:border-r border-gray-200">
+        <main className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden">
+          <section className="w-full h-1/2 md:w-[60%] md:h-full relative border-b md:border-b-0 md:border-r border-gray-200 overflow-hidden">
             <div className="flex items-center gap-1.5 absolute top-4 right-4 z-20">
               <button
                 type="button"
@@ -2150,7 +2162,9 @@ export default function PlannerWorkspace({
               )}
             </div>
 
-            <div id="map" className="w-full h-full bg-gray-200" />
+            {viewMode === "map" && (
+              <div id="map" className="w-full h-full bg-gray-200" />
+            )}
           </section>
 
           <section className="w-full h-1/2 md:w-[40%] md:h-full overflow-y-auto bg-white p-6 md:p-10">
@@ -2500,8 +2514,8 @@ export default function PlannerWorkspace({
           </section>
         </main>
       ) : (
-        <main className="flex-1 flex flex-col md:flex-row h-[calc(100vh-60px)] overflow-hidden bg-gray-50/60">
-          <section className="w-full h-3/5 md:w-[60%] md:h-full flex flex-col border-b md:border-b-0 md:border-r border-gray-200 bg-white relative">
+        <main className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden bg-gray-50/60">
+          <section className="w-full h-3/5 md:w-[60%] md:h-full flex flex-col border-b md:border-b-0 md:border-r border-gray-200 bg-white min-h-0 overflow-hidden">
             <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between gap-3 shrink-0">
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
@@ -2533,7 +2547,7 @@ export default function PlannerWorkspace({
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto px-5 py-4 pb-24 space-y-2">
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-2">
               {TIME_SLOTS.map((slot) => {
                 const slotItems = currentDayScheduleItems.filter(
                   (it) => it.timeSlot === slot
@@ -2639,17 +2653,17 @@ export default function PlannerWorkspace({
               })}
             </div>
 
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 bg-white/95 backdrop-blur-xs border border-gray-200 shadow-lg rounded-full px-3 py-1.5 flex items-center gap-1.5 max-w-[95%]">
+            <div className="shrink-0 border-t border-gray-200 bg-white px-4 py-2.5 flex items-center justify-center gap-2 z-20">
               <button
                 type="button"
                 disabled={activeDayIndex <= 1}
                 onClick={() => setActiveDayIndex((prev) => Math.max(1, prev - 1))}
-                className="px-2.5 py-1 rounded-full text-xs font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-35 disabled:pointer-events-none cursor-pointer"
+                className="px-3 py-1.5 rounded-full text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 disabled:opacity-35 disabled:pointer-events-none shrink-0 cursor-pointer"
               >
                 ◀ 이전
               </button>
 
-              <div className="flex items-center gap-1 overflow-x-auto max-w-[220px] sm:max-w-[340px] px-1">
+              <div className="flex items-center gap-1 overflow-x-auto px-1">
                 {tripDays.map((day) => {
                   const isCurrentDay = day.dayIndex === activeDayIndex;
                   return (
@@ -2657,7 +2671,7 @@ export default function PlannerWorkspace({
                       key={day.dayIndex}
                       type="button"
                       onClick={() => setActiveDayIndex(day.dayIndex)}
-                      className={`px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
+                      className={`px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                         isCurrentDay
                           ? "bg-emerald-600 text-white shadow-2xs"
                           : "text-gray-600 hover:bg-gray-100"
@@ -2675,7 +2689,7 @@ export default function PlannerWorkspace({
                 onClick={() =>
                   setActiveDayIndex((prev) => Math.min(tripDays.length, prev + 1))
                 }
-                className="px-2.5 py-1 rounded-full text-xs font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-35 disabled:pointer-events-none cursor-pointer"
+                className="px-3 py-1.5 rounded-full text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 disabled:opacity-35 disabled:pointer-events-none shrink-0 cursor-pointer"
               >
                 다음 ▶
               </button>
