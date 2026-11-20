@@ -633,6 +633,7 @@ export default function PlannerWorkspace({
   const [mapInstance, setMapInstance] = useState<any>(null);
   const [markersRef, setMarkersRef] = useState<any[]>([]);
   const [selectedPlaceId, setSelectedPlaceId] = useState<number | null>(null);
+  const [memoDrafts, setMemoDrafts] = useState<Record<number, string>>({});
   const [editingCategoryPlaceId, setEditingCategoryPlaceId] = useState<number | null>(null);
   const [hoveredPlaceTitle, setHoveredPlaceTitle] = useState<string | null>(null);
   const [markerDisplayMode, setMarkerDisplayMode] = useState<MarkerDisplayMode>("full");
@@ -657,6 +658,7 @@ export default function PlannerWorkspace({
   const isApplyingRemoteRef = useRef(false);
   const hasUserMutatedRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const memoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentPlanIdRef = useRef<string | undefined>(currentPlanId);
   const previousViewportRef = useRef<MapViewportSnapshot | null>(null);
   const selectedPlaceIdRef = useRef<number | null>(null);
@@ -666,6 +668,39 @@ export default function PlannerWorkspace({
     () => computeTripDays(scheduleConfig.startDateTime, scheduleConfig.endDateTime),
     [scheduleConfig.startDateTime, scheduleConfig.endDateTime]
   );
+
+  // 메모 수정 시 지도 마커가 불필요하게 재생성되지 않도록 마커 속성에만 의존하는 시그니처
+  const placesMapSignature = useMemo(
+    () =>
+      visiblePlaces
+        .map(
+          (p) =>
+            `${p.id}:${p.lat}:${p.lng}:${p.title}:${getPlaceCategory(p)}:${
+              p.isMustVisit ? 1 : 0
+            }`
+        )
+        .join("|"),
+    [visiblePlaces]
+  );
+
+  useEffect(() => {
+    setMemoDrafts((prev) => {
+      const next: Record<number, string> = {};
+      for (const p of visiblePlaces) {
+        next[p.id] = prev[p.id] !== undefined ? prev[p.id] : p.memo;
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placesMapSignature]);
+
+  useEffect(() => {
+    return () => {
+      if (memoSaveTimerRef.current) {
+        clearTimeout(memoSaveTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (activeDayIndex > tripDays.length) {
@@ -817,6 +852,13 @@ export default function PlannerWorkspace({
             return currentReal;
           }
           return parsedPlaces;
+        });
+        setMemoDrafts(() => {
+          const drafts: Record<number, string> = {};
+          for (const p of parsedPlaces) {
+            drafts[p.id] = p.memo;
+          }
+          return drafts;
         });
         setScheduleConfig(parsedSchedule);
         setDeletedMembers(nextDeleted);
@@ -991,6 +1033,7 @@ export default function PlannerWorkspace({
       hasUserMutatedRef.current = true;
       setPlanTitle(trimmedTitle);
       setPlaces([]);
+      setMemoDrafts({});
       setScheduleConfig(initialSchedule);
       setMembers([]);
       setDeletedMembers([]);
@@ -1138,6 +1181,13 @@ export default function PlannerWorkspace({
             setPlanTitle(updated.title);
           }
           setPlaces(parsedPlaces);
+          setMemoDrafts((prev) => {
+            const next: Record<number, string> = {};
+            for (const p of parsedPlaces) {
+              next[p.id] = prev[p.id] !== undefined ? prev[p.id] : p.memo;
+            }
+            return next;
+          });
           setScheduleConfig(parsedSchedule);
           setDeletedMembers(parsedDeletedMembers);
           setMembers((prev) =>
@@ -1374,7 +1424,7 @@ export default function PlannerWorkspace({
     setMarkersRef(nextMarkers);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    places,
+    placesMapSignature,
     mapInstance,
     selectedPlaceId,
     markerDisplayMode,
@@ -1492,12 +1542,13 @@ export default function PlannerWorkspace({
     const finalTitle = draftTitle.trim() || draftPlace.title.trim() || "제주 장소";
     const finalMemo = draftMemo.trim();
     const creator = activeUser || "익명";
+    const newPlaceId = Date.now();
 
     hasUserMutatedRef.current = true;
     const nextPlaces: PlaceItem[] = [
       ...visiblePlaces,
       {
-        id: Date.now(),
+        id: newPlaceId,
         lat: draftPlace.lat,
         lng: draftPlace.lng,
         title: finalTitle,
@@ -1509,6 +1560,7 @@ export default function PlannerWorkspace({
     ];
 
     setPlaces(nextPlaces);
+    setMemoDrafts((prev) => ({ ...prev, [newPlaceId]: finalMemo }));
     setDraftPlace(null);
     setDraftTitle("");
     setDraftMemo("");
@@ -1518,12 +1570,20 @@ export default function PlannerWorkspace({
     await persistPlanToDb(planTitle, nextPlaces, members, deletedMembers, scheduleConfig);
   };
 
-  const handleUpdateMemo = (id: number, nextMemo: string) => {
-    hasUserMutatedRef.current = true;
-    setPlaces((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, memo: nextMemo } : p))
-    );
-  };
+  const handleUpdateMemo = useCallback((id: number, nextMemo: string) => {
+    setMemoDrafts((prev) => ({ ...prev, [id]: nextMemo }));
+
+    if (memoSaveTimerRef.current) {
+      clearTimeout(memoSaveTimerRef.current);
+    }
+
+    memoSaveTimerRef.current = setTimeout(() => {
+      hasUserMutatedRef.current = true;
+      setPlaces((prev) =>
+        prev.map((p) => (p.id === id ? { ...p, memo: nextMemo } : p))
+      );
+    }, 250);
+  }, []);
 
   const handleChangePlaceCategory = (id: number, nextCategory: PlaceCategory) => {
     hasUserMutatedRef.current = true;
@@ -1548,6 +1608,11 @@ export default function PlannerWorkspace({
     if (editingCategoryPlaceId === id) {
       setEditingCategoryPlaceId(null);
     }
+    setMemoDrafts((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
     setPlaces((prev) => prev.filter((p) => p.id !== id));
   };
 
@@ -1555,13 +1620,15 @@ export default function PlannerWorkspace({
     const slot = targetSlot || selectedTimeSlot || "09:00";
     hasUserMutatedRef.current = true;
 
+    const latestMemo = memoDrafts[place.id] ?? place.memo;
+
     const newSlotItem: ScheduleSlotItem = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       dayIndex: activeDayIndex,
       timeSlot: slot,
       placeId: place.id,
       title: place.title,
-      memo: place.memo,
+      memo: latestMemo,
       categoryType: getPlaceCategory(place),
       isMustVisit: Boolean(place.isMustVisit),
       createdBy: place.createdBy || "익명",
@@ -2254,7 +2321,7 @@ export default function PlannerWorkspace({
                       <h2 className="text-lg font-bold text-gray-900">{selectedPlace.title}</h2>
                       <input
                         type="text"
-                        value={selectedPlace.memo}
+                        value={memoDrafts[selectedPlace.id] ?? selectedPlace.memo}
                         onChange={(e) => handleUpdateMemo(selectedPlace.id, e.target.value)}
                         placeholder="멘트를 입력해 보세요..."
                         className="w-full text-sm text-gray-700 mt-1.5 px-2.5 py-1.5 rounded-lg bg-white border border-gray-200 focus:border-emerald-500 outline-none"
@@ -2525,7 +2592,7 @@ export default function PlannerWorkspace({
 
                             <input
                               type="text"
-                              value={p.memo}
+                              value={memoDrafts[p.id] ?? p.memo}
                               onChange={(e) => handleUpdateMemo(p.id, e.target.value)}
                               placeholder="멘트를 입력해 보세요..."
                               className="w-full text-xs text-gray-600 mt-1.5 px-2 py-1 rounded border border-transparent hover:border-gray-200 focus:border-emerald-400 focus:bg-emerald-50/30 outline-none transition-colors"
@@ -2764,7 +2831,7 @@ export default function PlannerWorkspace({
 
               {visiblePlaces.length === 0 ? (
                 <div className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center text-sm text-gray-400">
-                  아직 저장된 장소가 없습니다. &lsquo;지도로 돌아가기&rsquo;를 눌러 장소를 먼저
+                  아직 저장된 장소가 없습니다. ‘지도로 돌아가기’를 눌러 장소를 먼저
                   저장해 보세요!
                 </div>
               ) : (
@@ -2775,6 +2842,7 @@ export default function PlannerWorkspace({
                     const addedCountToday = currentDayScheduleItems.filter(
                       (sc) => sc.placeId === place.id
                     ).length;
+                    const currentMemo = memoDrafts[place.id] ?? place.memo;
 
                     return (
                       <button
@@ -2805,9 +2873,9 @@ export default function PlannerWorkspace({
                           </span>
                         </div>
 
-                        {place.memo && (
+                        {currentMemo && (
                           <p className="text-xs text-gray-600 line-clamp-2 pl-0.5">
-                            {place.memo}
+                            {currentMemo}
                           </p>
                         )}
 
