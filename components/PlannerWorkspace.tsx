@@ -1128,36 +1128,6 @@ export default function PlannerWorkspace({
     }
   }, [resetSelectionAndViewport]);
 
-  // schedule 모드일 때 문서 내 다른 지도 요소/레이어까지 숨겨 겹침 방지
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const styleId = "jeju-schedule-hide-map-style";
-    let styleEl = document.getElementById(styleId) as HTMLStyleElement | null;
-
-    if (viewMode === "schedule" && !showPlanGate && !showUserGate) {
-      if (!styleEl) {
-        styleEl = document.createElement("style");
-        styleEl.id = styleId;
-        document.head.appendChild(styleEl);
-      }
-      styleEl.textContent = `
-        #map,
-        [id^="map"] {
-          display: none !important;
-          visibility: hidden !important;
-          pointer-events: none !important;
-        }
-      `;
-    } else if (styleEl) {
-      styleEl.remove();
-    }
-
-    return () => {
-      const el = document.getElementById(styleId);
-      if (el) el.remove();
-    };
-  }, [viewMode, showPlanGate, showUserGate]);
-
   useEffect(() => {
     if (showPlanGate || showUserGate || viewMode !== "map") {
       markersRef.forEach((m) => {
@@ -1929,9 +1899,6 @@ export default function PlannerWorkspace({
     );
   }
 
-  const currentDayMeta =
-    tripDays.find((d) => d.dayIndex === activeDayIndex) || tripDays[0];
-
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-white">
       <header className="h-[60px] shrink-0 px-4 md:px-6 border-b border-gray-200 bg-white flex items-center justify-between z-20 gap-3">
@@ -2541,188 +2508,219 @@ export default function PlannerWorkspace({
           </section>
         </main>
       ) : (
-        <main className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden bg-white relative z-30">
+        <main className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden bg-gray-50/60">
+          {/* 좌측: 1일차 ~ N일차 연속 스크롤 시간표 */}
           <section className="w-full h-3/5 md:w-[60%] md:h-full flex flex-col border-b md:border-b-0 md:border-r border-gray-200 bg-white min-h-0 overflow-hidden">
-            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between gap-3 shrink-0 bg-white">
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold">
-                    {activeDayIndex}일차
-                  </span>
-                  {currentDayMeta?.dateLabel && (
-                    <span className="text-sm font-semibold text-gray-800">
-                      {currentDayMeta.dateLabel}
-                      {currentDayMeta.weekdayLabel ? ` (${currentDayMeta.weekdayLabel})` : ""}
+            {/* 상단 요약 + 1일차·2일차·3일차 탭 */}
+            <div className="px-5 py-3.5 border-b border-gray-200 shrink-0 bg-white space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold">
+                      {activeDayIndex}일차 선택 중
                     </span>
-                  )}
-                  <span className="text-xs text-gray-400">
-                    · 총 {tripDays.length}일차 중 {activeDayIndex}일차
-                  </span>
+                    <span className="text-xs text-gray-500">
+                      총 {tripDays.length}일차 · 1일차부터 {tripDays.length}일차까지 아래로 쭉 이어집니다
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    원하는 일차·시간대를 고른 뒤 우측 저장된 장소 카드를 클릭하면 해당 일차 시간표에 추가됩니다.
+                  </p>
                 </div>
-                <p className="text-xs text-gray-500 mt-1">
-                  시간대를 고른 뒤 우측 저장된 장소 카드를 클릭하면 {activeDayIndex}일차 시간표에 추가됩니다.
-                </p>
+
+                <button
+                  type="button"
+                  onClick={() => setViewMode("map")}
+                  className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer inline-flex items-center gap-1.5 shrink-0"
+                >
+                  <span>🗺️</span>
+                  <span>지도로 돌아가기</span>
+                </button>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setViewMode("map")}
-                className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer inline-flex items-center gap-1.5 shrink-0"
-              >
-                <span>🗺️</span>
-                <span>지도로 돌아가기</span>
-              </button>
+              {/* 상단 일차 숫자 탭 */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+                {tripDays.map((day) => {
+                  const isSelectedDay = day.dayIndex === activeDayIndex;
+                  return (
+                    <button
+                      key={day.dayIndex}
+                      type="button"
+                      onClick={() => {
+                        setActiveDayIndex(day.dayIndex);
+                        const el = document.getElementById(`schedule-day-${day.dayIndex}`);
+                        if (el) {
+                          el.scrollIntoView({ behavior: "smooth", block: "start" });
+                        }
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-colors cursor-pointer border ${
+                        isSelectedDay
+                          ? "bg-emerald-600 text-white border-emerald-600 shadow-2xs"
+                          : "bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100"
+                      }`}
+                    >
+                      {day.dayIndex}일차
+                      {day.dateLabel ? ` (${day.dateLabel})` : ""}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-2 bg-white">
-              {TIME_SLOTS.map((slot) => {
-                const slotItems = currentDayScheduleItems.filter(
-                  (it) => it.timeSlot === slot
+            {/* 1일차 ~ N일차 전체 연속 스크롤 영역 */}
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-6 bg-white">
+              {tripDays.map((day) => {
+                const dayItems = scheduleConfig.items.filter(
+                  (item) => item.dayIndex === day.dayIndex
                 );
-                const isSelectedSlot = selectedTimeSlot === slot;
+                const isCurrentDay = day.dayIndex === activeDayIndex;
 
                 return (
                   <div
-                    key={slot}
-                    onClick={() => setSelectedTimeSlot(slot)}
-                    className={`rounded-xl border p-2.5 transition-all flex items-start gap-3 cursor-pointer ${
-                      isSelectedSlot
-                        ? "border-emerald-400 bg-emerald-50/40 ring-1 ring-emerald-300"
-                        : "border-gray-100 bg-white hover:border-gray-200"
+                    key={day.dayIndex}
+                    id={`schedule-day-${day.dayIndex}`}
+                    onClick={() => setActiveDayIndex(day.dayIndex)}
+                    className={`rounded-2xl border p-3.5 transition-colors ${
+                      isCurrentDay
+                        ? "border-emerald-300 bg-emerald-50/15"
+                        : "border-gray-200 bg-white"
                     }`}
                   >
-                    <div className="w-14 shrink-0 pt-1 flex flex-col items-start">
-                      <span
-                        className={`text-xs font-bold tabular-nums ${
-                          isSelectedSlot ? "text-emerald-700" : "text-gray-500"
-                        }`}
-                      >
-                        {slot}
-                      </span>
-                      {isSelectedSlot && (
-                        <span className="text-[10px] text-emerald-600 font-semibold mt-0.5">
-                          선택됨
+                    <div className="flex items-center justify-between gap-2 pb-2.5 mb-2.5 border-b border-gray-100">
+                      <div className="flex items-center gap-2">
+                        <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold">
+                          {day.dayIndex}일차
                         </span>
-                      )}
+                        {day.dateLabel && (
+                          <span className="text-sm font-semibold text-gray-800">
+                            {day.dateLabel}
+                            {day.weekdayLabel ? ` (${day.weekdayLabel})` : ""}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[11px] text-gray-400">
+                        일정 {dayItems.length}개
+                      </span>
                     </div>
 
-                    <div className="flex-1 min-w-0 space-y-1.5">
-                      {slotItems.length === 0 ? (
-                        <div className="h-7 flex items-center text-[11px] text-gray-400">
-                          {isSelectedSlot
-                            ? "우측 장소를 클릭하면 이 시간대에 추가됩니다"
-                            : "일정 없음"}
-                        </div>
-                      ) : (
-                        slotItems.map((sc) => {
-                          const cat = getPlaceCategory(sc);
-                          const cStyle = CATEGORY_STYLES[cat];
-                          return (
-                            <div
-                              key={sc.id}
-                              onClick={(e) => e.stopPropagation()}
-                              className={`p-2.5 rounded-lg border ${cStyle.cardBorder} ${cStyle.cardSelectedBg} flex items-center justify-between gap-2`}
-                            >
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span
-                                    className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${cStyle.badgeBg}`}
-                                  >
-                                    {cStyle.icon} {cStyle.label}
-                                  </span>
-                                  {sc.isMustVisit && (
-                                    <span className="text-[11px] font-bold text-amber-700">
-                                      ⭐
-                                    </span>
-                                  )}
-                                  <span className="text-sm font-semibold text-gray-900 truncate">
-                                    {sc.title}
-                                  </span>
-                                </div>
-                                {sc.memo && (
-                                  <p className="text-xs text-gray-600 mt-1 truncate">
-                                    {sc.memo}
-                                  </p>
-                                )}
-                              </div>
+                    <div className="space-y-1.5">
+                      {TIME_SLOTS.map((slot) => {
+                        const slotItems = dayItems.filter((it) => it.timeSlot === slot);
+                        const isSelectedSlot =
+                          isCurrentDay && selectedTimeSlot === slot;
 
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                <select
-                                  value={sc.timeSlot}
-                                  onChange={(e) =>
-                                    handleUpdateScheduleItemSlot(sc.id, e.target.value)
-                                  }
-                                  aria-label="시간대 변경"
-                                  className="text-[11px] border border-gray-200 rounded-md px-1.5 py-1 bg-white text-gray-700 cursor-pointer"
-                                >
-                                  {TIME_SLOTS.map((t) => (
-                                    <option key={t} value={t}>
-                                      {t}
-                                    </option>
-                                  ))}
-                                </select>
-                                <button
-                                  type="button"
-                                  onClick={() => handleRemoveScheduleItem(sc.id)}
-                                  className="text-xs text-gray-400 hover:text-red-600 px-1.5 py-1 rounded cursor-pointer"
-                                  title="시간표에서 제거"
-                                >
-                                  ✕
-                                </button>
-                              </div>
+                        return (
+                          <div
+                            key={`${day.dayIndex}-${slot}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveDayIndex(day.dayIndex);
+                              setSelectedTimeSlot(slot);
+                            }}
+                            className={`rounded-xl border p-2 transition-all flex items-start gap-3 cursor-pointer ${
+                              isSelectedSlot
+                                ? "border-emerald-400 bg-emerald-50/50 ring-1 ring-emerald-300"
+                                : "border-gray-100 bg-white hover:border-gray-200"
+                            }`}
+                          >
+                            <div className="w-12 shrink-0 pt-0.5 flex flex-col items-start">
+                              <span
+                                className={`text-xs font-bold tabular-nums ${
+                                  isSelectedSlot ? "text-emerald-700" : "text-gray-500"
+                                }`}
+                              >
+                                {slot}
+                              </span>
+                              {isSelectedSlot && (
+                                <span className="text-[10px] text-emerald-600 font-semibold">
+                                  선택됨
+                                </span>
+                              )}
                             </div>
-                          );
-                        })
-                      )}
+
+                            <div className="flex-1 min-w-0 space-y-1.5">
+                              {slotItems.length === 0 ? (
+                                <div className="h-6 flex items-center text-[11px] text-gray-400">
+                                  {isSelectedSlot
+                                    ? `우측 장소를 클릭하면 ${day.dayIndex}일차 ${slot}에 추가됩니다`
+                                    : "일정 없음"}
+                                </div>
+                              ) : (
+                                slotItems.map((sc) => {
+                                  const cat = getPlaceCategory(sc);
+                                  const cStyle = CATEGORY_STYLES[cat];
+                                  return (
+                                    <div
+                                      key={sc.id}
+                                      onClick={(e) => e.stopPropagation()}
+                                      className={`p-2 rounded-lg border ${cStyle.cardBorder} ${cStyle.cardSelectedBg} flex items-center justify-between gap-2`}
+                                    >
+                                      <div className="min-w-0 flex-1">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <span
+                                            className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${cStyle.badgeBg}`}
+                                          >
+                                            {cStyle.icon} {cStyle.label}
+                                          </span>
+                                          {sc.isMustVisit && (
+                                            <span className="text-[11px] font-bold text-amber-700">
+                                              ⭐
+                                            </span>
+                                          )}
+                                          <span className="text-sm font-semibold text-gray-900 truncate">
+                                            {sc.title}
+                                          </span>
+                                        </div>
+                                        {sc.memo && (
+                                          <p className="text-xs text-gray-600 mt-0.5 truncate">
+                                            {sc.memo}
+                                          </p>
+                                        )}
+                                      </div>
+
+                                      <div className="flex items-center gap-1.5 shrink-0">
+                                        <select
+                                          value={sc.timeSlot}
+                                          onChange={(e) =>
+                                            handleUpdateScheduleItemSlot(
+                                              sc.id,
+                                              e.target.value
+                                            )
+                                          }
+                                          aria-label="시간대 변경"
+                                          className="text-[11px] border border-gray-200 rounded-md px-1.5 py-1 bg-white text-gray-700 cursor-pointer"
+                                        >
+                                          {TIME_SLOTS.map((t) => (
+                                            <option key={t} value={t}>
+                                              {t}
+                                            </option>
+                                          ))}
+                                        </select>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRemoveScheduleItem(sc.id)}
+                                          className="text-xs text-gray-400 hover:text-red-600 px-1.5 py-1 rounded cursor-pointer"
+                                          title="시간표에서 제거"
+                                        >
+                                          ✕
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 );
               })}
             </div>
-
-            <div className="shrink-0 border-t border-gray-200 bg-white px-3 py-2.5 flex items-center justify-between gap-2 z-30">
-              <button
-                type="button"
-                disabled={activeDayIndex <= 1}
-                onClick={() => setActiveDayIndex((prev) => Math.max(1, prev - 1))}
-                className="px-2.5 py-1.5 rounded-full text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 disabled:opacity-35 disabled:pointer-events-none shrink-0 cursor-pointer"
-              >
-                ◀ 이전
-              </button>
-
-              <div className="flex items-center gap-1 overflow-x-auto flex-1 min-w-0 justify-center px-1">
-                {tripDays.map((day) => {
-                  const isCurrentDay = day.dayIndex === activeDayIndex;
-                  return (
-                    <button
-                      key={day.dayIndex}
-                      type="button"
-                      onClick={() => setActiveDayIndex(day.dayIndex)}
-                      className={`px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                        isCurrentDay
-                          ? "bg-emerald-600 text-white shadow-2xs"
-                          : "text-gray-600 hover:bg-gray-100"
-                      }`}
-                    >
-                      {day.dayIndex}일차
-                    </button>
-                  );
-                })}
-              </div>
-
-              <button
-                type="button"
-                disabled={activeDayIndex >= tripDays.length}
-                onClick={() =>
-                  setActiveDayIndex((prev) => Math.min(tripDays.length, prev + 1))
-                }
-                className="px-2.5 py-1.5 rounded-full text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 disabled:opacity-35 disabled:pointer-events-none shrink-0 cursor-pointer"
-              >
-                다음 ▶
-              </button>
-            </div>
           </section>
 
+          {/* 우측: 저장된 장소 보드 */}
           <section className="w-full h-2/5 md:w-[40%] md:h-full overflow-y-auto bg-white p-5 md:p-7">
             <div className="max-w-xl mx-auto space-y-4">
               <div className="flex items-center justify-between gap-2 border-b border-gray-100 pb-3">
@@ -2741,7 +2739,7 @@ export default function PlannerWorkspace({
 
               {visiblePlaces.length === 0 ? (
                 <div className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center text-sm text-gray-400">
-                  아직 저장된 장소가 없습니다. &lsquo;지도로 돌아가기&rsquo;를 눌러 장소를 먼저
+                  아직 저장된 장소가 없습니다. ‘지도로 돌아가기’를 눌러 장소를 먼저
                   저장해 보세요!
                 </div>
               ) : (
@@ -2749,8 +2747,9 @@ export default function PlannerWorkspace({
                   {visiblePlaces.map((place) => {
                     const cat = getPlaceCategory(place);
                     const cStyle = CATEGORY_STYLES[cat];
-                    const addedCountToday = currentDayScheduleItems.filter(
-                      (sc) => sc.placeId === place.id
+                    const addedCountOnDay = scheduleConfig.items.filter(
+                      (sc) =>
+                        sc.dayIndex === activeDayIndex && sc.placeId === place.id
                     ).length;
 
                     return (
@@ -2790,9 +2789,9 @@ export default function PlannerWorkspace({
 
                         <div className="pt-1 flex items-center justify-between text-[11px] text-gray-400">
                           <span>작성: {place.createdBy || "익명"}</span>
-                          {addedCountToday > 0 && (
+                          {addedCountOnDay > 0 && (
                             <span className="text-emerald-700 font-semibold">
-                              오늘 시간표에 {addedCountToday}회 담김
+                              {activeDayIndex}일차에 {addedCountOnDay}회 담김
                             </span>
                           )}
                         </div>
