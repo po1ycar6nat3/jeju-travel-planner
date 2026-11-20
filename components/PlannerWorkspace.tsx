@@ -161,6 +161,9 @@ const TIME_SLOTS = [
   "22:00",
 ];
 
+const FALLBACK_START_DT = "2026-11-22T09:00";
+const FALLBACK_END_DT = "2026-11-24T20:00";
+
 function formatInputDateTimeLocal(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   const y = date.getFullYear();
@@ -208,7 +211,10 @@ function computeTripDays(
   const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate());
   const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate());
   const diffMs = endDay.getTime() - startDay.getTime();
-  const totalDays = Math.max(1, Math.min(30, Math.floor(diffMs / (24 * 60 * 60 * 1000)) + 1));
+  const totalDays = Math.max(
+    1,
+    Math.min(30, Math.floor(diffMs / (24 * 60 * 60 * 1000)) + 1)
+  );
 
   return Array.from({ length: totalDays }, (_, idx) => {
     const d = new Date(startDay.getTime() + idx * 24 * 60 * 60 * 1000);
@@ -296,10 +302,9 @@ function parsePlanPayload(
   const realPlaces: PlaceItem[] = [];
   let metaMembers: string[] = [];
   let metaDeletedMembers: string[] = [];
-  const defaultRange = getDefaultTripRange();
   let schedule: TripScheduleConfig = {
-    startDateTime: defaultRange.startDateTime,
-    endDateTime: defaultRange.endDateTime,
+    startDateTime: FALLBACK_START_DT,
+    endDateTime: FALLBACK_END_DT,
     items: [],
   };
 
@@ -328,11 +333,11 @@ function parsePlanPayload(
             startDateTime:
               typeof cfg.startDateTime === "string" && cfg.startDateTime
                 ? cfg.startDateTime
-                : defaultRange.startDateTime,
+                : FALLBACK_START_DT,
             endDateTime:
               typeof cfg.endDateTime === "string" && cfg.endDateTime
                 ? cfg.endDateTime
-                : defaultRange.endDateTime,
+                : FALLBACK_END_DT,
             items: Array.isArray(cfg.items)
               ? cfg.items.filter(
                   (it): it is ScheduleSlotItem =>
@@ -556,7 +561,6 @@ export default function PlannerWorkspace({
   initialMembers = [],
 }: PlannerWorkspaceProps) {
   const router = useRouter();
-  const defaultRange = useMemo(() => getDefaultTripRange(), []);
   const initialPlanKey = planId || loadStoredPlanId();
   const initialDeleted = loadStoredDeletedMembers(initialPlanKey);
   const initialParsed = parsePlanPayload(
@@ -570,9 +574,30 @@ export default function PlannerWorkspace({
   const [planGateMode, setPlanGateMode] = useState<PlanGateMode>("choose");
   const [knownPlans, setKnownPlans] = useState<PlanSummaryItem[]>(() => loadKnownPlans());
   const [newPlanTitle, setNewPlanTitle] = useState("제주 여행 일정");
-  const [newStartDateTime, setNewStartDateTime] = useState(defaultRange.startDateTime);
-  const [newEndDateTime, setNewEndDateTime] = useState(defaultRange.endDateTime);
+  const [newStartDateTime, setNewStartDateTime] = useState(FALLBACK_START_DT);
+  const [newEndDateTime, setNewEndDateTime] = useState(FALLBACK_END_DT);
   const [isCreatingPlan, setIsCreatingPlan] = useState(false);
+
+  // 클라이언트 마운트 시점에 실제 현재 기준 기본 날짜/시간 세팅
+  useEffect(() => {
+    const range = getDefaultTripRange();
+    setNewStartDateTime(range.startDateTime);
+    setNewEndDateTime(range.endDateTime);
+    setScheduleConfig((prev) => {
+      if (
+        prev.startDateTime === FALLBACK_START_DT &&
+        prev.endDateTime === FALLBACK_END_DT &&
+        prev.items.length === 0
+      ) {
+        return {
+          ...prev,
+          startDateTime: range.startDateTime,
+          endDateTime: range.endDateTime,
+        };
+      }
+      return prev;
+    });
+  }, []);
 
   // 선택된 여행 일정 데이터
   const [currentPlanId, setCurrentPlanId] = useState<string | undefined>(initialPlanKey);
@@ -682,7 +707,6 @@ export default function PlannerWorkspace({
     saveStoredDeletedMembers(currentPlanId, deletedMembers);
   }, [currentPlanId, members, deletedMembers]);
 
-  // 전체 여행 일정 목록 불러오기 (기존 여행 일정 선택 화면용)
   const refreshAllPlansList = useCallback(async () => {
     try {
       const { data, error } = await supabase
@@ -941,15 +965,17 @@ export default function PlannerWorkspace({
     [deletedMembers, router, scheduleConfig]
   );
 
-  // 새 여행 일정 생성 핸들러
   const handleCreateNewTripPlan = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmedTitle = newPlanTitle.trim() || "제주 여행 일정";
-    if (!newStartDateTime || !newEndDateTime) {
+    const effectiveStart = newStartDateTime || getDefaultTripRange().startDateTime;
+    const effectiveEnd = newEndDateTime || getDefaultTripRange().endDateTime;
+
+    if (!effectiveStart || !effectiveEnd) {
       alert("시작 날짜/시간과 종료 날짜/시간을 모두 선택해 주세요.");
       return;
     }
-    if (new Date(newEndDateTime).getTime() < new Date(newStartDateTime).getTime()) {
+    if (new Date(effectiveEnd).getTime() < new Date(effectiveStart).getTime()) {
       alert("종료 날짜/시간이 시작 날짜/시간보다 빠를 수 없습니다.");
       return;
     }
@@ -957,8 +983,8 @@ export default function PlannerWorkspace({
     setIsCreatingPlan(true);
     try {
       const initialSchedule: TripScheduleConfig = {
-        startDateTime: newStartDateTime,
-        endDateTime: newEndDateTime,
+        startDateTime: effectiveStart,
+        endDateTime: effectiveEnd,
         items: [],
       };
 
@@ -1005,8 +1031,8 @@ export default function PlannerWorkspace({
           upsertKnownPlan({
             id: createdId,
             title: trimmedTitle,
-            startDateTime: newStartDateTime,
-            endDateTime: newEndDateTime,
+            startDateTime: effectiveStart,
+            endDateTime: effectiveEnd,
             placesCount: 0,
             updatedAt: new Date().toISOString(),
           })
@@ -1026,7 +1052,6 @@ export default function PlannerWorkspace({
     }
   };
 
-  // 기존 여행 일정 선택 핸들러
   const handleSelectExistingPlan = async (targetPlanId: string) => {
     currentPlanIdRef.current = targetPlanId;
     setCurrentPlanId(targetPlanId);
@@ -1041,7 +1066,6 @@ export default function PlannerWorkspace({
     setShowUserGate(true);
   };
 
-  // 기존 여행 목록에서 항목 제거
   const handleRemoveKnownPlan = (targetId: string) => {
     const next = removeKnownPlan(targetId);
     setKnownPlans(next);
@@ -1178,7 +1202,6 @@ export default function PlannerWorkspace({
     }
   }, [resetSelectionAndViewport]);
 
-  // 지도 화면 진입 시 네이버 지도 초기화
   useEffect(() => {
     if (showPlanGate || showUserGate || viewMode !== "map") return;
 
@@ -1528,7 +1551,6 @@ export default function PlannerWorkspace({
     setPlaces((prev) => prev.filter((p) => p.id !== id));
   };
 
-  // 시간표에 장소 추가 (현재 선택된 일차 & 선택된 시간대 기준)
   const handleAddPlaceToDaySchedule = async (place: PlaceItem, targetSlot?: string) => {
     const slot = targetSlot || selectedTimeSlot || "09:00";
     hasUserMutatedRef.current = true;
@@ -1611,9 +1633,6 @@ export default function PlannerWorkspace({
     error: "저장 오류 발생",
   }[syncStatus];
 
-  // =========================================================================
-  // 1단계: 여행 일정 선택 / 신규 여행 일정 생성 화면
-  // =========================================================================
   if (showPlanGate) {
     return (
       <div className="min-h-screen w-screen bg-gradient-to-b from-emerald-50/70 to-white flex items-center justify-center p-4">
@@ -1793,9 +1812,6 @@ export default function PlannerWorkspace({
     );
   }
 
-  // =========================================================================
-  // 2단계: 사용자 선택 / 신규 등록 게이트
-  // =========================================================================
   if (showUserGate) {
     return (
       <div className="min-h-screen w-screen bg-gradient-to-b from-emerald-50/70 to-white flex items-center justify-center p-4">
@@ -1936,9 +1952,6 @@ export default function PlannerWorkspace({
     );
   }
 
-  // =========================================================================
-  // 상단 공통 헤더
-  // =========================================================================
   const currentDayMeta =
     tripDays.find((d) => d.dayIndex === activeDayIndex) || tripDays[0];
 
@@ -1994,13 +2007,9 @@ export default function PlannerWorkspace({
         </div>
       </header>
 
-      {/* =====================================================================
-          뷰 1: 지도(좌 60%) + 저장된 장소 목록(우 40%)
-         ===================================================================== */}
       {viewMode === "map" ? (
         <main className="flex-1 flex flex-col md:flex-row h-[calc(100vh-60px)] overflow-hidden">
           <section className="w-full h-1/2 md:w-[60%] md:h-full relative border-b md:border-b-0 md:border-r border-gray-200">
-            {/* 우측 상단: '일정' 버튼 + 마커 표시 모드 토글 */}
             <div className="flex items-center gap-1.5 absolute top-4 right-4 z-20">
               <button
                 type="button"
@@ -2555,14 +2564,8 @@ export default function PlannerWorkspace({
           </section>
         </main>
       ) : (
-        /* =====================================================================
-            뷰 2: 여행 일정 시간표(좌 60%, 하루치만 표시 + 중앙 하단 일차 이동)
-                 + 저장된 장소(노션 스타일 카드, 우 40%, 클릭 시 시간표 추가)
-           ===================================================================== */
         <main className="flex-1 flex flex-col md:flex-row h-[calc(100vh-60px)] overflow-hidden bg-gray-50/60">
-          {/* 왼쪽 60%: 하루치 시간표 + 중앙 하단 일차 이동 버튼 */}
           <section className="w-full h-3/5 md:w-[60%] md:h-full flex flex-col border-b md:border-b-0 md:border-r border-gray-200 bg-white relative">
-            {/* 시간표 상단 헤더 + 우측 상단 '지도로 돌아가기' 버튼 */}
             <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between gap-3 shrink-0">
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
@@ -2594,7 +2597,6 @@ export default function PlannerWorkspace({
               </button>
             </div>
 
-            {/* 하루치 시간표 타임라인 */}
             <div className="flex-1 overflow-y-auto px-5 py-4 pb-24 space-y-2">
               {TIME_SLOTS.map((slot) => {
                 const slotItems = currentDayScheduleItems.filter(
@@ -2701,7 +2703,6 @@ export default function PlannerWorkspace({
               })}
             </div>
 
-            {/* 시간표 중앙 하단: 일차 사이 이동 버튼 */}
             <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 bg-white/95 backdrop-blur-xs border border-gray-200 shadow-lg rounded-full px-3 py-1.5 flex items-center gap-1.5 max-w-[95%]">
               <button
                 type="button"
@@ -2745,7 +2746,6 @@ export default function PlannerWorkspace({
             </div>
           </section>
 
-          {/* 오른쪽 40%: 노션 스타일 저장된 장소 카드 목록 (클릭 시 시간표에 추가) */}
           <section className="w-full h-2/5 md:w-[40%] md:h-full overflow-y-auto bg-white p-5 md:p-7">
             <div className="max-w-xl mx-auto space-y-4">
               <div className="flex items-center justify-between gap-2 border-b border-gray-100 pb-3">
@@ -2764,7 +2764,7 @@ export default function PlannerWorkspace({
 
               {visiblePlaces.length === 0 ? (
                 <div className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center text-sm text-gray-400">
-                  아직 저장된 장소가 없습니다. ‘지도로 돌아가기’를 눌러 장소를 먼저
+                  아직 저장된 장소가 없습니다. &lsquo;지도로 돌아가기&rsquo;를 눌러 장소를 먼저
                   저장해 보세요!
                 </div>
               ) : (
