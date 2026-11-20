@@ -25,8 +25,8 @@ export interface PlaceItem {
 
 export interface ScheduleSlotItem {
   id: string;
-  dayIndex: number; // 1부터 시작 (1일차, 2일차, ...)
-  timeSlot: string; // 예: "09:00", "10:00", ...
+  dayIndex: number;
+  timeSlot: string;
   placeId: number;
   title: string;
   memo?: string;
@@ -36,8 +36,8 @@ export interface ScheduleSlotItem {
 }
 
 export interface TripScheduleConfig {
-  startDateTime: string; // "YYYY-MM-DDTHH:mm"
-  endDateTime: string; // "YYYY-MM-DDTHH:mm"
+  startDateTime: string;
+  endDateTime: string;
   items: ScheduleSlotItem[];
 }
 
@@ -163,15 +163,13 @@ const TIME_SLOTS = [
 
 const FALLBACK_START_DT = "2026-11-22T09:00";
 const FALLBACK_END_DT = "2026-11-24T20:00";
+const MEMBERS_META_ID = -999999;
 
 function formatInputDateTimeLocal(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
-  const y = date.getFullYear();
-  const m = pad(date.getMonth() + 1);
-  const d = pad(date.getDate());
-  const h = pad(date.getHours());
-  const min = pad(date.getMinutes());
-  return `${y}-${m}-${d}T${h}:${min}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+    date.getDate()
+  )}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function getDefaultTripRange(): { startDateTime: string; endDateTime: string } {
@@ -282,8 +280,6 @@ function getPlaceCategory(place: {
   }
   return inferCategoryType(undefined, place.title);
 }
-
-const MEMBERS_META_ID = -999999;
 
 function isMembersMetaPlace(place: { id?: number; title?: string }): boolean {
   return place.id === MEMBERS_META_ID || place.title === "__MEMBERS__";
@@ -404,41 +400,19 @@ function buildNaverMapCoordUrl(title: string, lat: number, lng: number): string 
   return `https://map.naver.com/v5/?c=${lng},${lat},16,0,0,0,dh`;
 }
 
+// planId가 있을 때만 플랜별 키를 사용하고, 없을 때는 임시 키를 사용
 function getMemberStorageKey(id?: string): string {
-  return `jeju_planner_members_${id || "default"}`;
+  return id ? `jeju_planner_members_plan_${id}` : "jeju_planner_members_draft";
 }
 
 function getDeletedMemberStorageKey(id?: string): string {
-  return `jeju_planner_deleted_members_${id || "default"}`;
+  return id
+    ? `jeju_planner_deleted_members_plan_${id}`
+    : "jeju_planner_deleted_members_draft";
 }
 
 function getKnownPlansStorageKey(): string {
   return "jeju_planner_known_plans_v1";
-}
-
-function getActivePlanStorageKey(): string {
-  return "jeju_planner_active_plan_id";
-}
-
-function loadStoredPlanId(): string | undefined {
-  if (typeof window === "undefined") return undefined;
-  try {
-    const val = window.localStorage.getItem(getActivePlanStorageKey());
-    return val && val.trim() ? val.trim() : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function saveStoredPlanId(id?: string): void {
-  if (typeof window === "undefined") return;
-  try {
-    if (id && id.trim()) {
-      window.localStorage.setItem(getActivePlanStorageKey(), id.trim());
-    }
-  } catch {
-    // 무시
-  }
 }
 
 function loadKnownPlans(): PlanSummaryItem[] {
@@ -458,28 +432,28 @@ function loadKnownPlans(): PlanSummaryItem[] {
   }
 }
 
-function upsertKnownPlan(summary: PlanSummaryItem): PlanSummaryItem[] {
-  const current = loadKnownPlans();
-  const next = [
-    summary,
-    ...current.filter((item) => item.id !== summary.id),
-  ];
-  if (typeof window !== "undefined") {
-    try {
-      window.localStorage.setItem(getKnownPlansStorageKey(), JSON.stringify(next));
-    } catch {
-      // 무시
-    }
+function saveKnownPlans(list: PlanSummaryItem[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(getKnownPlansStorageKey(), JSON.stringify(list));
+  } catch {
+    // 무시
   }
+}
+
+function upsertKnownPlan(summary: PlanSummaryItem): PlanSummaryItem[] {
+  const next = [summary, ...loadKnownPlans().filter((item) => item.id !== summary.id)];
+  saveKnownPlans(next);
   return next;
 }
 
 function removeKnownPlan(id: string): PlanSummaryItem[] {
-  const current = loadKnownPlans();
-  const next = current.filter((item) => item.id !== id);
+  const next = loadKnownPlans().filter((item) => item.id !== id);
+  saveKnownPlans(next);
   if (typeof window !== "undefined") {
     try {
-      window.localStorage.setItem(getKnownPlansStorageKey(), JSON.stringify(next));
+      window.localStorage.removeItem(getMemberStorageKey(id));
+      window.localStorage.removeItem(getDeletedMemberStorageKey(id));
     } catch {
       // 무시
     }
@@ -488,7 +462,7 @@ function removeKnownPlan(id: string): PlanSummaryItem[] {
 }
 
 function loadStoredMembers(id?: string): string[] {
-  if (typeof window === "undefined") return [];
+  if (!id || typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(getMemberStorageKey(id));
     if (!raw) return [];
@@ -502,7 +476,7 @@ function loadStoredMembers(id?: string): string[] {
 }
 
 function saveStoredMembers(id: string | undefined, list: string[]): void {
-  if (typeof window === "undefined") return;
+  if (!id || typeof window === "undefined") return;
   try {
     window.localStorage.setItem(getMemberStorageKey(id), JSON.stringify(list));
   } catch {
@@ -511,7 +485,7 @@ function saveStoredMembers(id: string | undefined, list: string[]): void {
 }
 
 function loadStoredDeletedMembers(id?: string): string[] {
-  if (typeof window === "undefined") return [];
+  if (!id || typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(getDeletedMemberStorageKey(id));
     if (!raw) return [];
@@ -525,7 +499,7 @@ function loadStoredDeletedMembers(id?: string): string[] {
 }
 
 function saveStoredDeletedMembers(id: string | undefined, list: string[]): void {
-  if (typeof window === "undefined") return;
+  if (!id || typeof window === "undefined") return;
   try {
     window.localStorage.setItem(getDeletedMemberStorageKey(id), JSON.stringify(list));
   } catch {
@@ -533,22 +507,21 @@ function saveStoredDeletedMembers(id: string | undefined, list: string[]): void 
   }
 }
 
-function mergeMembers(
-  initialMembers: string[] = [],
-  places: PlaceItem[] = [],
-  storedMembers: string[] = [],
+// 현재 플랜의 멤버 목록만 병합 (다른 플랜의 사용자와 절대 섞이지 않음)
+function mergePlanMembers(
+  planMembers: string[] = [],
+  planPlaces: PlaceItem[] = [],
   deletedMembers: string[] = []
 ): string[] {
   const deletedSet = new Set(deletedMembers.map((m) => m.trim()).filter(Boolean));
-  const fromPlaces = places
+  const fromPlaces = planPlaces
     .filter((p) => !isMembersMetaPlace(p))
     .map((p) => p.createdBy?.trim())
     .filter((name): name is string => Boolean(name) && name !== "익명");
 
   return Array.from(
     new Set([
-      ...initialMembers.map((m) => m.trim()).filter(Boolean),
-      ...storedMembers.map((m) => m.trim()).filter(Boolean),
+      ...planMembers.map((m) => m.trim()).filter(Boolean),
       ...fromPlaces,
     ])
   ).filter((name) => !deletedSet.has(name));
@@ -561,8 +534,7 @@ export default function PlannerWorkspace({
   initialMembers = [],
 }: PlannerWorkspaceProps) {
   const router = useRouter();
-  const initialPlanKey = planId || loadStoredPlanId();
-  const initialDeleted = loadStoredDeletedMembers(initialPlanKey);
+  const initialDeleted = loadStoredDeletedMembers(planId);
   const initialParsed = parsePlanPayload(
     initialPlaces,
     initialMembers,
@@ -578,29 +550,8 @@ export default function PlannerWorkspace({
   const [newEndDateTime, setNewEndDateTime] = useState(FALLBACK_END_DT);
   const [isCreatingPlan, setIsCreatingPlan] = useState(false);
 
-  // 클라이언트 마운트 시점에 실제 현재 기준 기본 날짜/시간 세팅
-  useEffect(() => {
-    const range = getDefaultTripRange();
-    setNewStartDateTime(range.startDateTime);
-    setNewEndDateTime(range.endDateTime);
-    setScheduleConfig((prev) => {
-      if (
-        prev.startDateTime === FALLBACK_START_DT &&
-        prev.endDateTime === FALLBACK_END_DT &&
-        prev.items.length === 0
-      ) {
-        return {
-          ...prev,
-          startDateTime: range.startDateTime,
-          endDateTime: range.endDateTime,
-        };
-      }
-      return prev;
-    });
-  }, []);
-
   // 선택된 여행 일정 데이터
-  const [currentPlanId, setCurrentPlanId] = useState<string | undefined>(initialPlanKey);
+  const [currentPlanId, setCurrentPlanId] = useState<string | undefined>(planId);
   const [planTitle, setPlanTitle] = useState(initialTitle);
   const [places, setPlaces] = useState<PlaceItem[]>(initialParsed.parsedPlaces);
   const [scheduleConfig, setScheduleConfig] = useState<TripScheduleConfig>(
@@ -610,13 +561,18 @@ export default function PlannerWorkspace({
     initialParsed.parsedDeletedMembers
   );
   const [members, setMembers] = useState<string[]>(() =>
-    mergeMembers(
+    mergePlanMembers(
       initialParsed.parsedMembers,
       initialParsed.parsedPlaces,
-      loadStoredMembers(initialPlanKey),
       initialParsed.parsedDeletedMembers
     )
   );
+
+  useEffect(() => {
+    const range = getDefaultTripRange();
+    setNewStartDateTime(range.startDateTime);
+    setNewEndDateTime(range.endDateTime);
+  }, []);
 
   // 2단계: 사용자 선택 / 등록 게이트
   const [activeUser, setActiveUser] = useState<string | null>(null);
@@ -686,11 +642,10 @@ export default function PlannerWorkspace({
     return matchesCategory && matchesMustVisit && matchesUser;
   });
 
-  const filterableUsers = mergeMembers(members, visiblePlaces, [], deletedMembers);
+  const filterableUsers = mergePlanMembers(members, visiblePlaces, deletedMembers);
 
   const currentDayScheduleItems = useMemo(
-    () =>
-      scheduleConfig.items.filter((item) => item.dayIndex === activeDayIndex),
+    () => scheduleConfig.items.filter((item) => item.dayIndex === activeDayIndex),
     [scheduleConfig.items, activeDayIndex]
   );
 
@@ -701,10 +656,9 @@ export default function PlannerWorkspace({
   useEffect(() => {
     currentPlanIdRef.current = currentPlanId;
     if (currentPlanId) {
-      saveStoredPlanId(currentPlanId);
+      saveStoredMembers(currentPlanId, members);
+      saveStoredDeletedMembers(currentPlanId, deletedMembers);
     }
-    saveStoredMembers(currentPlanId, members);
-    saveStoredDeletedMembers(currentPlanId, deletedMembers);
   }, [currentPlanId, members, deletedMembers]);
 
   const refreshAllPlansList = useCallback(async () => {
@@ -715,14 +669,17 @@ export default function PlannerWorkspace({
         .order("updated_at", { ascending: false })
         .limit(30);
 
-      if (!error && Array.isArray(data) && data.length > 0) {
+      if (!error && Array.isArray(data)) {
         const mapped: PlanSummaryItem[] = data
           .filter((row) => row && typeof row.id === "string")
           .map((row) => {
             const parsed = parsePlanPayload(row.places);
             return {
               id: row.id,
-              title: typeof row.title === "string" && row.title.trim() ? row.title : "제목 없는 여행",
+              title:
+                typeof row.title === "string" && row.title.trim()
+                  ? row.title
+                  : "제목 없는 여행",
               startDateTime: parsed.parsedSchedule.startDateTime,
               endDateTime: parsed.parsedSchedule.endDateTime,
               placesCount: parsed.parsedPlaces.length,
@@ -730,13 +687,7 @@ export default function PlannerWorkspace({
             };
           });
         setKnownPlans(mapped);
-        if (typeof window !== "undefined") {
-          try {
-            window.localStorage.setItem(getKnownPlansStorageKey(), JSON.stringify(mapped));
-          } catch {
-            // 무시
-          }
-        }
+        saveKnownPlans(mapped);
       }
     } catch (err) {
       console.error("여행 목록 조회 실패:", err);
@@ -749,48 +700,35 @@ export default function PlannerWorkspace({
     }
   }, [showPlanGate, planGateMode, refreshAllPlansList]);
 
+  // 특정 planId의 데이터만 독립적으로 불러오기 (다른 플랜과 절대 섞지 않음)
   const hydratePlanFromServer = useCallback(async (targetId?: string) => {
+    if (!targetId) return;
+
+    // 이전 플랜 상태 초기화
+    setPlaces([]);
+    setScheduleConfig({
+      startDateTime: FALLBACK_START_DT,
+      endDateTime: FALLBACK_END_DT,
+      items: [],
+    });
+    setMembers([]);
+    setDeletedMembers([]);
+    setSelectedPlaceId(null);
+    setSelectedUserFilter(null);
+    hasUserMutatedRef.current = false;
+
     try {
-      let row: {
-        id?: string;
-        title?: string;
-        places?: unknown;
-        members?: unknown;
-        updated_at?: string;
-      } | null = null;
+      const { data: row, error } = await supabase
+        .from("travel_plans")
+        .select("*")
+        .eq("id", targetId)
+        .maybeSingle();
 
-      if (targetId) {
-        const { data, error } = await supabase
-          .from("travel_plans")
-          .select("*")
-          .eq("id", targetId)
-          .maybeSingle();
-        if (!error && data) {
-          row = data;
-        }
-      }
-
-      if (!row && targetId) {
-        const { data, error } = await supabase
-          .from("travel_plans")
-          .select("*")
-          .order("updated_at", { ascending: false })
-          .limit(1);
-        if (!error && Array.isArray(data) && data.length > 0) {
-          row = data[0];
-        }
-      }
+      if (error) throw error;
 
       if (row) {
-        const resolvedId = typeof row.id === "string" && row.id ? row.id : targetId;
-        if (resolvedId) {
-          currentPlanIdRef.current = resolvedId;
-          setCurrentPlanId(resolvedId);
-          saveStoredPlanId(resolvedId);
-        }
-
-        const localDeleted = loadStoredDeletedMembers(resolvedId);
-        const localMembers = loadStoredMembers(resolvedId);
+        const localDeleted = loadStoredDeletedMembers(targetId);
+        const localMembers = loadStoredMembers(targetId);
         const {
           parsedPlaces,
           parsedMembers,
@@ -799,42 +737,35 @@ export default function PlannerWorkspace({
         } = parsePlanPayload(row.places, row.members, localDeleted);
 
         const nextDeleted = Array.from(new Set([...parsedDeletedMembers, ...localDeleted]));
-        const nextMembers = mergeMembers(
+        const nextMembers = mergePlanMembers(
           [...parsedMembers, ...localMembers],
           parsedPlaces,
-          [],
           nextDeleted
         );
 
         const nextTitle =
-          typeof row.title === "string" && row.title.trim() ? row.title : "나의 제주 여행 일정";
+          typeof row.title === "string" && row.title.trim()
+            ? row.title
+            : "나의 제주 여행 일정";
 
         isApplyingRemoteRef.current = true;
         setPlanTitle(nextTitle);
-        setPlaces((prev) => {
-          const currentReal = prev.filter((p) => !isMembersMetaPlace(p));
-          if (parsedPlaces.length === 0 && currentReal.length > 0 && hasUserMutatedRef.current) {
-            return currentReal;
-          }
-          return parsedPlaces;
-        });
+        setPlaces(parsedPlaces);
         setScheduleConfig(parsedSchedule);
         setDeletedMembers(nextDeleted);
         setMembers(nextMembers);
-        saveStoredDeletedMembers(resolvedId, nextDeleted);
-        saveStoredMembers(resolvedId, nextMembers);
-        if (resolvedId) {
-          setKnownPlans(
-            upsertKnownPlan({
-              id: resolvedId,
-              title: nextTitle,
-              startDateTime: parsedSchedule.startDateTime,
-              endDateTime: parsedSchedule.endDateTime,
-              placesCount: parsedPlaces.length,
-              updatedAt: row.updated_at,
-            })
-          );
-        }
+        saveStoredDeletedMembers(targetId, nextDeleted);
+        saveStoredMembers(targetId, nextMembers);
+        setKnownPlans(
+          upsertKnownPlan({
+            id: targetId,
+            title: nextTitle,
+            startDateTime: parsedSchedule.startDateTime,
+            endDateTime: parsedSchedule.endDateTime,
+            placesCount: parsedPlaces.length,
+            updatedAt: row.updated_at,
+          })
+        );
         setSyncStatus("saved");
         setTimeout(() => {
           isApplyingRemoteRef.current = false;
@@ -842,6 +773,7 @@ export default function PlannerWorkspace({
       }
     } catch (err) {
       console.error("일정 불러오기 실패:", err);
+      setSyncStatus("error");
     } finally {
       hasHydratedFromDbRef.current = true;
     }
@@ -851,7 +783,6 @@ export default function PlannerWorkspace({
     if (planId) {
       currentPlanIdRef.current = planId;
       setCurrentPlanId(planId);
-      saveStoredPlanId(planId);
       setShowPlanGate(false);
       setShowUserGate(true);
       hydratePlanFromServer(planId);
@@ -916,25 +847,8 @@ export default function PlannerWorkspace({
           const data = await res.json();
           if (data?.id) {
             savedId = data.id;
-            const oldKey = getMemberStorageKey(undefined);
-            const newKey = getMemberStorageKey(data.id);
-            const oldDelKey = getDeletedMemberStorageKey(undefined);
-            const newDelKey = getDeletedMemberStorageKey(data.id);
-            try {
-              const existingOld = window.localStorage.getItem(oldKey);
-              if (existingOld && !window.localStorage.getItem(newKey)) {
-                window.localStorage.setItem(newKey, existingOld);
-              }
-              const existingDelOld = window.localStorage.getItem(oldDelKey);
-              if (existingDelOld && !window.localStorage.getItem(newDelKey)) {
-                window.localStorage.setItem(newDelKey, existingDelOld);
-              }
-            } catch {
-              // 무시
-            }
             currentPlanIdRef.current = data.id;
             setCurrentPlanId(data.id);
-            saveStoredPlanId(data.id);
             saveStoredMembers(data.id, nextMembers);
             saveStoredDeletedMembers(data.id, nextDeletedMembers);
             router.replace(`/plan/${data.id}`);
@@ -988,13 +902,14 @@ export default function PlannerWorkspace({
         items: [],
       };
 
-      hasUserMutatedRef.current = true;
+      hasUserMutatedRef.current = false;
       setPlanTitle(trimmedTitle);
       setPlaces([]);
       setScheduleConfig(initialSchedule);
       setMembers([]);
       setDeletedMembers([]);
       setActiveUser(null);
+      setSelectedUserFilter(null);
       setActiveDayIndex(1);
       setViewMode("map");
 
@@ -1026,7 +941,8 @@ export default function PlannerWorkspace({
       if (createdId) {
         currentPlanIdRef.current = createdId;
         setCurrentPlanId(createdId);
-        saveStoredPlanId(createdId);
+        saveStoredMembers(createdId, []);
+        saveStoredDeletedMembers(createdId, []);
         setKnownPlans(
           upsertKnownPlan({
             id: createdId,
@@ -1055,8 +971,8 @@ export default function PlannerWorkspace({
   const handleSelectExistingPlan = async (targetPlanId: string) => {
     currentPlanIdRef.current = targetPlanId;
     setCurrentPlanId(targetPlanId);
-    saveStoredPlanId(targetPlanId);
     setActiveUser(null);
+    setSelectedUserFilter(null);
     setActiveDayIndex(1);
     setViewMode("map");
     hasHydratedFromDbRef.current = false;
@@ -1066,12 +982,31 @@ export default function PlannerWorkspace({
     setShowUserGate(true);
   };
 
-  const handleRemoveKnownPlan = (targetId: string) => {
-    const next = removeKnownPlan(targetId);
-    setKnownPlans(next);
-    if (currentPlanIdRef.current === targetId) {
-      currentPlanIdRef.current = undefined;
-      setCurrentPlanId(undefined);
+  // DB와 로컬 목록에서 일정을 완전히 삭제
+  const handleRemoveKnownPlan = async (targetId: string) => {
+    try {
+      const { error } = await supabase
+        .from("travel_plans")
+        .delete()
+        .eq("id", targetId);
+
+      if (error) throw error;
+
+      const next = removeKnownPlan(targetId);
+      setKnownPlans(next);
+
+      if (currentPlanIdRef.current === targetId) {
+        currentPlanIdRef.current = undefined;
+        setCurrentPlanId(undefined);
+        setPlaces([]);
+        setMembers([]);
+        setDeletedMembers([]);
+        setActiveUser(null);
+        router.replace("/");
+      }
+    } catch (err) {
+      console.error("일정 삭제 실패:", err);
+      alert("여행 일정을 삭제하는 중 오류가 발생했습니다.");
     }
   };
 
@@ -1080,6 +1015,7 @@ export default function PlannerWorkspace({
     if (!hasHydratedFromDbRef.current) return;
     if (isApplyingRemoteRef.current) return;
     if (!hasUserMutatedRef.current) return;
+    if (!currentPlanIdRef.current) return;
 
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
@@ -1140,8 +1076,8 @@ export default function PlannerWorkspace({
           setPlaces(parsedPlaces);
           setScheduleConfig(parsedSchedule);
           setDeletedMembers(parsedDeletedMembers);
-          setMembers((prev) =>
-            mergeMembers(parsedMembers, parsedPlaces, prev, parsedDeletedMembers)
+          setMembers(
+            mergePlanMembers(parsedMembers, parsedPlaces, parsedDeletedMembers)
           );
           setSyncStatus("saved");
 
@@ -1406,7 +1342,7 @@ export default function PlannerWorkspace({
 
     hasUserMutatedRef.current = true;
     const nextDeleted = deletedMembers.filter((m) => m !== trimmed);
-    const updatedMembers = mergeMembers(members, visiblePlaces, [trimmed], nextDeleted);
+    const updatedMembers = mergePlanMembers([...members, trimmed], visiblePlaces, nextDeleted);
 
     setDeletedMembers(nextDeleted);
     setMembers(updatedMembers);
@@ -1795,10 +1731,10 @@ export default function PlannerWorkspace({
                         <button
                           type="button"
                           onClick={() => handleRemoveKnownPlan(item.id)}
-                          title="목록에서 제거"
+                          title="일정 삭제"
                           className="text-xs text-gray-400 hover:text-red-600 px-2 py-1 rounded hover:bg-red-50 transition-colors cursor-pointer shrink-0"
                         >
-                          제거
+                          삭제
                         </button>
                       </div>
                     );
@@ -2764,7 +2700,7 @@ export default function PlannerWorkspace({
 
               {visiblePlaces.length === 0 ? (
                 <div className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center text-sm text-gray-400">
-                  아직 저장된 장소가 없습니다. &lsquo;지도로 돌아가기&rsquo;를 눌러 장소를 먼저
+                  아직 저장된 장소가 없습니다. ‘지도로 돌아가기’를 눌러 장소를 먼저
                   저장해 보세요!
                 </div>
               ) : (
