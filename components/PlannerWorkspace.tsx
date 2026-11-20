@@ -25,8 +25,8 @@ export interface PlaceItem {
 
 export interface ScheduleSlotItem {
   id: string;
-  dayIndex: number; // 1부터 시작 (1일차, 2일차, ...)
-  timeSlot: string; // 예: "09:00", "10:00", ...
+  dayIndex: number;
+  timeSlot: string;
   placeId: number;
   title: string;
   memo?: string;
@@ -36,8 +36,8 @@ export interface ScheduleSlotItem {
 }
 
 export interface TripScheduleConfig {
-  startDateTime: string; // "YYYY-MM-DDTHH:mm"
-  endDateTime: string; // "YYYY-MM-DDTHH:mm"
+  startDateTime: string;
+  endDateTime: string;
   items: ScheduleSlotItem[];
 }
 
@@ -578,7 +578,6 @@ export default function PlannerWorkspace({
   const [newEndDateTime, setNewEndDateTime] = useState(FALLBACK_END_DT);
   const [isCreatingPlan, setIsCreatingPlan] = useState(false);
 
-  // 클라이언트 마운트 시점에 실제 현재 기준 기본 날짜/시간 세팅
   useEffect(() => {
     const range = getDefaultTripRange();
     setNewStartDateTime(range.startDateTime);
@@ -669,7 +668,6 @@ export default function PlannerWorkspace({
     [scheduleConfig.startDateTime, scheduleConfig.endDateTime]
   );
 
-  // 메모 수정 시 지도 마커가 불필요하게 재생성되지 않도록 마커 속성에만 의존하는 시그니처
   const placesMapSignature = useMemo(
     () =>
       visiblePlaces
@@ -784,45 +782,30 @@ export default function PlannerWorkspace({
     }
   }, [showPlanGate, planGateMode, refreshAllPlansList]);
 
+  // 선택한 targetId의 일정만 정확히 불러오도록 수정 (다른 최신 일정으로 fallback 금지)
   const hydratePlanFromServer = useCallback(async (targetId?: string) => {
+    if (!targetId) {
+      hasHydratedFromDbRef.current = true;
+      return;
+    }
+
     try {
-      let row: {
-        id?: string;
-        title?: string;
-        places?: unknown;
-        members?: unknown;
-        updated_at?: string;
-      } | null = null;
+      const { data, error } = await supabase
+        .from("travel_plans")
+        .select("*")
+        .eq("id", targetId)
+        .maybeSingle();
 
-      if (targetId) {
-        const { data, error } = await supabase
-          .from("travel_plans")
-          .select("*")
-          .eq("id", targetId)
-          .maybeSingle();
-        if (!error && data) {
-          row = data;
-        }
+      if (error) {
+        console.error("일정 불러오기 실패:", error);
+        return;
       }
 
-      if (!row && targetId) {
-        const { data, error } = await supabase
-          .from("travel_plans")
-          .select("*")
-          .order("updated_at", { ascending: false })
-          .limit(1);
-        if (!error && Array.isArray(data) && data.length > 0) {
-          row = data[0];
-        }
-      }
-
-      if (row) {
-        const resolvedId = typeof row.id === "string" && row.id ? row.id : targetId;
-        if (resolvedId) {
-          currentPlanIdRef.current = resolvedId;
-          setCurrentPlanId(resolvedId);
-          saveStoredPlanId(resolvedId);
-        }
+      if (data) {
+        const resolvedId = typeof data.id === "string" && data.id ? data.id : targetId;
+        currentPlanIdRef.current = resolvedId;
+        setCurrentPlanId(resolvedId);
+        saveStoredPlanId(resolvedId);
 
         const localDeleted = loadStoredDeletedMembers(resolvedId);
         const localMembers = loadStoredMembers(resolvedId);
@@ -831,7 +814,7 @@ export default function PlannerWorkspace({
           parsedMembers,
           parsedDeletedMembers,
           parsedSchedule,
-        } = parsePlanPayload(row.places, row.members, localDeleted);
+        } = parsePlanPayload(data.places, data.members, localDeleted);
 
         const nextDeleted = Array.from(new Set([...parsedDeletedMembers, ...localDeleted]));
         const nextMembers = mergeMembers(
@@ -842,17 +825,11 @@ export default function PlannerWorkspace({
         );
 
         const nextTitle =
-          typeof row.title === "string" && row.title.trim() ? row.title : "나의 제주 여행 일정";
+          typeof data.title === "string" && data.title.trim() ? data.title : "나의 제주 여행 일정";
 
         isApplyingRemoteRef.current = true;
         setPlanTitle(nextTitle);
-        setPlaces((prev) => {
-          const currentReal = prev.filter((p) => !isMembersMetaPlace(p));
-          if (parsedPlaces.length === 0 && currentReal.length > 0 && hasUserMutatedRef.current) {
-            return currentReal;
-          }
-          return parsedPlaces;
-        });
+        setPlaces(parsedPlaces);
         setMemoDrafts(() => {
           const drafts: Record<number, string> = {};
           for (const p of parsedPlaces) {
@@ -865,19 +842,28 @@ export default function PlannerWorkspace({
         setMembers(nextMembers);
         saveStoredDeletedMembers(resolvedId, nextDeleted);
         saveStoredMembers(resolvedId, nextMembers);
-        if (resolvedId) {
-          setKnownPlans(
-            upsertKnownPlan({
-              id: resolvedId,
-              title: nextTitle,
-              startDateTime: parsedSchedule.startDateTime,
-              endDateTime: parsedSchedule.endDateTime,
-              placesCount: parsedPlaces.length,
-              updatedAt: row.updated_at,
-            })
-          );
-        }
+        setKnownPlans(
+          upsertKnownPlan({
+            id: resolvedId,
+            title: nextTitle,
+            startDateTime: parsedSchedule.startDateTime,
+            endDateTime: parsedSchedule.endDateTime,
+            placesCount: parsedPlaces.length,
+            updatedAt: data.updated_at,
+          })
+        );
         setSyncStatus("saved");
+        setTimeout(() => {
+          isApplyingRemoteRef.current = false;
+        }, 120);
+      } else {
+        // DB에 해당 ID 행이 없는 경우 빈 상태로 초기화
+        isApplyingRemoteRef.current = true;
+        setPlaces([]);
+        setMemoDrafts({});
+        setScheduleConfig((prev) => ({ ...prev, items: [] }));
+        setMembers([]);
+        setDeletedMembers([]);
         setTimeout(() => {
           isApplyingRemoteRef.current = false;
         }, 120);
@@ -958,22 +944,6 @@ export default function PlannerWorkspace({
           const data = await res.json();
           if (data?.id) {
             savedId = data.id;
-            const oldKey = getMemberStorageKey(undefined);
-            const newKey = getMemberStorageKey(data.id);
-            const oldDelKey = getDeletedMemberStorageKey(undefined);
-            const newDelKey = getDeletedMemberStorageKey(data.id);
-            try {
-              const existingOld = window.localStorage.getItem(oldKey);
-              if (existingOld && !window.localStorage.getItem(newKey)) {
-                window.localStorage.setItem(newKey, existingOld);
-              }
-              const existingDelOld = window.localStorage.getItem(oldDelKey);
-              if (existingDelOld && !window.localStorage.getItem(newDelKey)) {
-                window.localStorage.setItem(newDelKey, existingDelOld);
-              }
-            } catch {
-              // 무시
-            }
             currentPlanIdRef.current = data.id;
             setCurrentPlanId(data.id);
             saveStoredPlanId(data.id);
@@ -1130,7 +1100,7 @@ export default function PlannerWorkspace({
 
     saveTimerRef.current = setTimeout(() => {
       persistPlanToDb(planTitle, visiblePlaces, members, deletedMembers, scheduleConfig);
-    }, 300);
+    }, 200);
 
     return () => {
       if (saveTimerRef.current) {
@@ -1154,16 +1124,14 @@ export default function PlannerWorkspace({
           filter: `id=eq.${currentPlanId}`,
         },
         (payload) => {
+          if (isApplyingRemoteRef.current || hasUserMutatedRef.current) return;
+
           const updated = payload.new as {
             title?: string;
             places?: unknown;
             members?: unknown;
           };
           if (!updated) return;
-
-          if (saveTimerRef.current) {
-            clearTimeout(saveTimerRef.current);
-          }
 
           const {
             parsedPlaces,
@@ -1252,20 +1220,33 @@ export default function PlannerWorkspace({
     }
   }, [resetSelectionAndViewport]);
 
+  // 지도 화면일 때만 네이버 지도 생성, schedule 뷰로 전환 시 마커 및 지도 인스턴스 정리
   useEffect(() => {
-    if (showPlanGate || showUserGate || viewMode !== "map") return;
+    if (showPlanGate || showUserGate || viewMode !== "map") {
+      markersRef.forEach((m) => {
+        try {
+          m.setMap(null);
+        } catch {
+          // 무시
+        }
+      });
+      setMarkersRef([]);
+      setMapInstance(null);
+      return;
+    }
 
-    setMapInstance(null);
-    setMarkersRef([]);
-
+    let cancelled = false;
     const initMap = () => {
+      if (cancelled) return;
+      const mapEl = document.getElementById("map");
+      if (!mapEl) return;
       if (window.naver && window.naver.maps) {
         const firstPlace = visiblePlaces[0];
         const centerLat = firstPlace ? firstPlace.lat : 33.3846;
         const centerLng = firstPlace ? firstPlace.lng : 126.5535;
         const zoomLevel = firstPlace ? 12 : 10;
 
-        const map = new window.naver.maps.Map("map", {
+        const map = new window.naver.maps.Map(mapEl, {
           center: new window.naver.maps.LatLng(centerLat, centerLng),
           zoom: zoomLevel,
         });
@@ -1282,21 +1263,28 @@ export default function PlannerWorkspace({
           initMap();
         }
       }, 100);
-      return () => clearInterval(checkInterval);
+      return () => {
+        cancelled = true;
+        clearInterval(checkInterval);
+      };
     }
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showPlanGate, showUserGate, viewMode]);
 
   useEffect(() => {
-    if (!mapInstance || !window.naver) return;
+    if (!mapInstance || !window.naver || viewMode !== "map") return;
     const listener = window.naver.maps.Event.addListener(mapInstance, "click", handleMapClick);
     return () => {
       window.naver.maps.Event.removeListener(listener);
     };
-  }, [mapInstance, handleMapClick]);
+  }, [mapInstance, handleMapClick, viewMode]);
 
   useEffect(() => {
-    if (!mapInstance || !window.naver) return;
+    if (!mapInstance || !window.naver || viewMode !== "map") return;
 
     markersRef.forEach((m) => m.setMap(null));
 
@@ -1426,6 +1414,7 @@ export default function PlannerWorkspace({
   }, [
     placesMapSignature,
     mapInstance,
+    viewMode,
     selectedPlaceId,
     markerDisplayMode,
     selectedCategories,
@@ -1585,22 +1574,27 @@ export default function PlannerWorkspace({
     }, 250);
   }, []);
 
-  const handleChangePlaceCategory = (id: number, nextCategory: PlaceCategory) => {
+  const handleChangePlaceCategory = async (id: number, nextCategory: PlaceCategory) => {
     hasUserMutatedRef.current = true;
-    setPlaces((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, categoryType: nextCategory } : p))
+    const nextPlaces = visiblePlaces.map((p) =>
+      p.id === id ? { ...p, categoryType: nextCategory } : p
     );
+    setPlaces(nextPlaces);
     setEditingCategoryPlaceId(null);
+    await persistPlanToDb(planTitle, nextPlaces, members, deletedMembers, scheduleConfig);
   };
 
-  const handleTogglePlaceMustVisit = (id: number) => {
+  const handleTogglePlaceMustVisit = async (id: number) => {
     hasUserMutatedRef.current = true;
-    setPlaces((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, isMustVisit: !p.isMustVisit } : p))
+    const nextPlaces = visiblePlaces.map((p) =>
+      p.id === id ? { ...p, isMustVisit: !p.isMustVisit } : p
     );
+    setPlaces(nextPlaces);
+    await persistPlanToDb(planTitle, nextPlaces, members, deletedMembers, scheduleConfig);
   };
 
-  const handleDeletePlace = (id: number) => {
+  // 장소 삭제 시 즉시 DB에도 반영하여 새로고침 시 되살아나지 않게 처리
+  const handleDeletePlace = async (id: number) => {
     hasUserMutatedRef.current = true;
     if (selectedPlaceId === id) {
       resetSelectionAndViewport();
@@ -1613,7 +1607,14 @@ export default function PlannerWorkspace({
       delete next[id];
       return next;
     });
-    setPlaces((prev) => prev.filter((p) => p.id !== id));
+    const nextPlaces = visiblePlaces.filter((p) => p.id !== id);
+    const nextSchedule: TripScheduleConfig = {
+      ...scheduleConfig,
+      items: scheduleConfig.items.filter((it) => it.placeId !== id),
+    };
+    setPlaces(nextPlaces);
+    setScheduleConfig(nextSchedule);
+    await persistPlanToDb(planTitle, nextPlaces, members, deletedMembers, nextSchedule);
   };
 
   const handleAddPlaceToDaySchedule = async (place: PlaceItem, targetSlot?: string) => {
@@ -2024,7 +2025,7 @@ export default function PlannerWorkspace({
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden">
-      <header className="h-[60px] shrink-0 px-4 md:px-6 border-b border-gray-200 bg-white flex items-center justify-between z-10 gap-3">
+      <header className="h-[60px] shrink-0 px-4 md:px-6 border-b border-gray-200 bg-white flex items-center justify-between z-20 gap-3">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-xl shrink-0" role="img" aria-label="jeju">
             🍊
@@ -2632,7 +2633,8 @@ export default function PlannerWorkspace({
         </main>
       ) : (
         <main className="flex-1 flex flex-col md:flex-row h-[calc(100vh-60px)] overflow-hidden bg-gray-50/60">
-          <section className="w-full h-3/5 md:w-[60%] md:h-full flex flex-col border-b md:border-b-0 md:border-r border-gray-200 bg-white relative">
+          {/* 왼쪽 60%: 하루치 시간표(스크롤 영역) + 하단 전용 일차 이동 바 */}
+          <section className="w-full h-3/5 md:w-[60%] md:h-full flex flex-col border-b md:border-b-0 md:border-r border-gray-200 bg-white overflow-hidden">
             <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between gap-3 shrink-0">
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
@@ -2664,7 +2666,7 @@ export default function PlannerWorkspace({
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto px-5 py-4 pb-24 space-y-2">
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-2">
               {TIME_SLOTS.map((slot) => {
                 const slotItems = currentDayScheduleItems.filter(
                   (it) => it.timeSlot === slot
@@ -2770,49 +2772,53 @@ export default function PlannerWorkspace({
               })}
             </div>
 
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 bg-white/95 backdrop-blur-xs border border-gray-200 shadow-lg rounded-full px-3 py-1.5 flex items-center gap-1.5 max-w-[95%]">
-              <button
-                type="button"
-                disabled={activeDayIndex <= 1}
-                onClick={() => setActiveDayIndex((prev) => Math.max(1, prev - 1))}
-                className="px-2.5 py-1 rounded-full text-xs font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-35 disabled:pointer-events-none cursor-pointer"
-              >
-                ◀ 이전
-              </button>
+            {/* 시간표 중앙 하단 전용 일차 이동 영역 */}
+            <div className="shrink-0 border-t border-gray-200 bg-white px-4 py-2.5 flex items-center justify-center z-20">
+              <div className="bg-gray-50 border border-gray-200 shadow-sm rounded-full px-3 py-1.5 flex items-center gap-1.5 max-w-full">
+                <button
+                  type="button"
+                  disabled={activeDayIndex <= 1}
+                  onClick={() => setActiveDayIndex((prev) => Math.max(1, prev - 1))}
+                  className="px-2.5 py-1 rounded-full text-xs font-semibold text-gray-700 hover:bg-gray-200/70 disabled:opacity-35 disabled:pointer-events-none cursor-pointer shrink-0"
+                >
+                  ◀ 이전
+                </button>
 
-              <div className="flex items-center gap-1 overflow-x-auto max-w-[220px] sm:max-w-[340px] px-1">
-                {tripDays.map((day) => {
-                  const isCurrentDay = day.dayIndex === activeDayIndex;
-                  return (
-                    <button
-                      key={day.dayIndex}
-                      type="button"
-                      onClick={() => setActiveDayIndex(day.dayIndex)}
-                      className={`px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
-                        isCurrentDay
-                          ? "bg-emerald-600 text-white shadow-2xs"
-                          : "text-gray-600 hover:bg-gray-100"
-                      }`}
-                    >
-                      {day.dayIndex}일차
-                    </button>
-                  );
-                })}
+                <div className="flex items-center gap-1 overflow-x-auto max-w-[220px] sm:max-w-[360px] px-1">
+                  {tripDays.map((day) => {
+                    const isCurrentDay = day.dayIndex === activeDayIndex;
+                    return (
+                      <button
+                        key={day.dayIndex}
+                        type="button"
+                        onClick={() => setActiveDayIndex(day.dayIndex)}
+                        className={`px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
+                          isCurrentDay
+                            ? "bg-emerald-600 text-white shadow-2xs"
+                            : "text-gray-600 hover:bg-gray-200/70"
+                        }`}
+                      >
+                        {day.dayIndex}일차
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <button
+                  type="button"
+                  disabled={activeDayIndex >= tripDays.length}
+                  onClick={() =>
+                    setActiveDayIndex((prev) => Math.min(tripDays.length, prev + 1))
+                  }
+                  className="px-2.5 py-1 rounded-full text-xs font-semibold text-gray-700 hover:bg-gray-200/70 disabled:opacity-35 disabled:pointer-events-none cursor-pointer shrink-0"
+                >
+                  다음 ▶
+                </button>
               </div>
-
-              <button
-                type="button"
-                disabled={activeDayIndex >= tripDays.length}
-                onClick={() =>
-                  setActiveDayIndex((prev) => Math.min(tripDays.length, prev + 1))
-                }
-                className="px-2.5 py-1 rounded-full text-xs font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-35 disabled:pointer-events-none cursor-pointer"
-              >
-                다음 ▶
-              </button>
             </div>
           </section>
 
+          {/* 오른쪽 40%: 저장된 장소 목록 */}
           <section className="w-full h-2/5 md:w-[40%] md:h-full overflow-y-auto bg-white p-5 md:p-7">
             <div className="max-w-xl mx-auto space-y-4">
               <div className="flex items-center justify-between gap-2 border-b border-gray-100 pb-3">
@@ -2831,7 +2837,7 @@ export default function PlannerWorkspace({
 
               {visiblePlaces.length === 0 ? (
                 <div className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center text-sm text-gray-400">
-                  아직 저장된 장소가 없습니다. ‘지도로 돌아가기’를 눌러 장소를 먼저
+                  아직 저장된 장소가 없습니다. &lsquo;지도로 돌아가기&rsquo;를 눌러 장소를 먼저
                   저장해 보세요!
                 </div>
               ) : (
