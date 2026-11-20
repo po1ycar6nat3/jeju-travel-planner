@@ -201,7 +201,9 @@ function computeTripDays(
 
   const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate());
   const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate());
-  const diffDays = Math.floor((endDay.getTime() - startDay.getTime()) / (24 * 60 * 60 * 1000));
+  const diffDays = Math.floor(
+    (endDay.getTime() - startDay.getTime()) / (24 * 60 * 60 * 1000)
+  );
   const totalDays = Math.max(1, Math.min(30, diffDays + 1));
 
   return Array.from({ length: totalDays }, (_, idx) => {
@@ -229,10 +231,18 @@ function inferCategoryType(rawCategory?: string, title?: string): PlaceCategory 
   if (/카페|커피|디저트|베이커리|제과|마카롱|와플|빙수|tea|cafe|coffee/.test(text)) {
     return "cafe";
   }
-  if (/액티비티|레저|스포츠|체험|서핑|카약|패러글라이딩|승마|다이빙|스노클링|카트|짚라인|요트|낚시|수상/.test(text)) {
+  if (
+    /액티비티|레저|스포츠|체험|서핑|카약|패러글라이딩|승마|다이빙|스노클링|카트|짚라인|요트|낚시|수상/.test(
+      text
+    )
+  ) {
     return "activity";
   }
-  if (/관광|명소|해수욕장|해변|오름|폭포|공원|전망대|박물관|미술관|수목원|유적|사찰|성당|일출봉|올레/.test(text)) {
+  if (
+    /관광|명소|해수욕장|해변|오름|폭포|공원|전망대|박물관|미술관|수목원|유적|사찰|성당|일출봉|올레/.test(
+      text
+    )
+  ) {
     return "sightseeing";
   }
   return "restaurant";
@@ -433,7 +443,6 @@ export default function PlannerWorkspace({
 }: PlannerWorkspaceProps) {
   const router = useRouter();
 
-  // planId prop이 있을 때만 바로 해당 일정으로 진입, 없을 때는 일정 선택/생성 게이트부터 시작
   const [showPlanGate, setShowPlanGate] = useState<boolean>(() => !planId);
   const [planGateMode, setPlanGateMode] = useState<PlanGateMode>("choose");
   const [knownPlans, setKnownPlans] = useState<PlanSummaryItem[]>(() => loadKnownPlans());
@@ -481,7 +490,9 @@ export default function PlannerWorkspace({
   const [selectedUserFilter, setSelectedUserFilter] = useState<string | null>(null);
   const [isUserFilterOpen, setIsUserFilterOpen] = useState(false);
 
-  const [syncStatus, setSyncStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [syncStatus, setSyncStatus] = useState<"idle" | "saving" | "saved" | "error">(
+    "idle"
+  );
 
   const [draftPlace, setDraftPlace] = useState<CandidatePlace | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
@@ -492,7 +503,9 @@ export default function PlannerWorkspace({
   const currentPlanIdRef = useRef<string | undefined>(currentPlanId);
   const isApplyingRemoteRef = useRef(false);
   const memoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const previousViewportRef = useRef<{ lat: number; lng: number; zoom: number } | null>(null);
+  const previousViewportRef = useRef<{ lat: number; lng: number; zoom: number } | null>(
+    null
+  );
 
   useEffect(() => {
     currentPlanIdRef.current = currentPlanId;
@@ -617,7 +630,6 @@ export default function PlannerWorkspace({
     }
   }, [showPlanGate, planGateMode, refreshAllPlansList]);
 
-  // 지정된 targetId의 일정만 정확히 불러오고, 다른 일정으로 절대 fallback하지 않음
   const loadSinglePlan = useCallback(async (targetId: string) => {
     currentPlanIdRef.current = targetId;
     setCurrentPlanId(targetId);
@@ -693,7 +705,6 @@ export default function PlannerWorkspace({
     }
   }, [planId, loadSinglePlan]);
 
-  // 현재 상태를 DB에 직접 저장하는 단일 함수
   const commitPlanState = useCallback(
     async (params: {
       title?: string;
@@ -712,6 +723,7 @@ export default function PlannerWorkspace({
       const nextMembers = params.members ?? members;
       const nextSchedule = params.schedule ?? scheduleConfig;
 
+      let savedId = targetId;
       setSyncStatus("saving");
       try {
         const payload = {
@@ -732,7 +744,6 @@ export default function PlannerWorkspace({
           members: nextMembers,
         };
 
-        let savedId = targetId;
         if (savedId) {
           const res = await fetch(`/api/plans/${savedId}`, {
             method: "PATCH",
@@ -874,7 +885,6 @@ export default function PlannerWorkspace({
     setKnownPlans(removeKnownPlan(targetId));
   };
 
-  // 실시간 동기화: 다른 탭/사용자 변경만 반영하고 저장 중에는 덮어쓰지 않음
   useEffect(() => {
     if (!currentPlanId) return;
 
@@ -959,7 +969,6 @@ export default function PlannerWorkspace({
     [mapInstance, markerDisplayMode, selectedPlaceId]
   );
 
-  // 지도 화면일 때만 네이버 지도 초기화 및 인증 에러 감지
   useEffect(() => {
     if (showPlanGate || showUserGate || viewMode !== "map") {
       markersRef.forEach((m) => {
@@ -1254,7 +1263,6 @@ export default function PlannerWorkspace({
     await commitPlanState({ places: nextPlaces });
   };
 
-  // 장소 삭제 시 상태 + 시간표 항목을 함께 제거하고 즉시 DB에 저장
   const handleDeletePlace = async (id: number) => {
     if (selectedPlaceId === id) {
       resetSelectionAndViewport();
@@ -1445,7 +1453,9 @@ export default function PlannerWorkspace({
                 disabled={isCreatingPlan}
                 className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-sm font-semibold rounded-xl transition-colors cursor-pointer"
               >
-                {isCreatingPlan ? "일정 생성 중..." : "여행 일정 만들고 사용자 선택으로 이동"}
+                {isCreatingPlan
+                  ? "일정 생성 중..."
+                  : "여행 일정 만들고 사용자 선택으로 이동"}
               </button>
             </form>
           )}
@@ -1740,7 +1750,11 @@ export default function PlannerWorkspace({
                         : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
                     }`}
                   >
-                    {mode === "full" ? "전체" : mode === "compact" ? "간략히 보기" : "숨기기"}
+                    {mode === "full"
+                      ? "전체"
+                      : mode === "compact"
+                      ? "간략히 보기"
+                      : "숨기기"}
                   </button>
                 ))}
               </div>
@@ -1902,7 +1916,9 @@ export default function PlannerWorkspace({
                   네이버 지도 API 인증이 완료되지 않았습니다.
                 </p>
                 <p className="text-xs text-gray-500 max-w-sm">
-                  네이버 클라우드 플랫폼 콘솔의 Web 서비스 URL(현재 접속 주소)과 클라이언트 키 설정을 확인해 주세요. 검색 및 장소 추가·일정 관리는 아래 목록에서 계속 이용할 수 있습니다.
+                  네이버 클라우드 플랫폼 콘솔의 Web 서비스 URL(현재 접속 주소)과
+                  클라이언트 키 설정을 확인해 주세요. 검색 및 장소 추가·일정 관리는
+                  아래 목록에서 계속 이용할 수 있습니다.
                 </p>
               </div>
             ) : (
@@ -1939,7 +1955,9 @@ export default function PlannerWorkspace({
 
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1">
-                      <h2 className="text-lg font-bold text-gray-900">{selectedPlace.title}</h2>
+                      <h2 className="text-lg font-bold text-gray-900">
+                        {selectedPlace.title}
+                      </h2>
                       <input
                         type="text"
                         value={memoDrafts[selectedPlace.id] ?? selectedPlace.memo}
@@ -2410,7 +2428,7 @@ export default function PlannerWorkspace({
 
               {visiblePlaces.length === 0 ? (
                 <div className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center text-sm text-gray-400">
-                  아직 저장된 장소가 없습니다. &lsquo;지도로 돌아가기&rsquo;를 눌러 장소를
+                  아직 저장된 장소가 없습니다. ‘지도로 돌아가기’를 눌러 장소를
                   먼저 저장해 보세요!
                 </div>
               ) : (
