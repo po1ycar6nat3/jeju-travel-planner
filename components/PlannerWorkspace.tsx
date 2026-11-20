@@ -1128,7 +1128,36 @@ export default function PlannerWorkspace({
     }
   }, [resetSelectionAndViewport]);
 
-  // viewMode === "map"일 때만 지도를 생성하고, 일정 모드 전환 시 완전히 해제
+  // schedule 모드일 때 문서 내 다른 지도 요소/레이어까지 숨겨 겹침 방지
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const styleId = "jeju-schedule-hide-map-style";
+    let styleEl = document.getElementById(styleId) as HTMLStyleElement | null;
+
+    if (viewMode === "schedule" && !showPlanGate && !showUserGate) {
+      if (!styleEl) {
+        styleEl = document.createElement("style");
+        styleEl.id = styleId;
+        document.head.appendChild(styleEl);
+      }
+      styleEl.textContent = `
+        #map,
+        [id^="map"] {
+          display: none !important;
+          visibility: hidden !important;
+          pointer-events: none !important;
+        }
+      `;
+    } else if (styleEl) {
+      styleEl.remove();
+    }
+
+    return () => {
+      const el = document.getElementById(styleId);
+      if (el) el.remove();
+    };
+  }, [viewMode, showPlanGate, showUserGate]);
+
   useEffect(() => {
     if (showPlanGate || showUserGate || viewMode !== "map") {
       markersRef.forEach((m) => {
@@ -1904,7 +1933,7 @@ export default function PlannerWorkspace({
     tripDays.find((d) => d.dayIndex === activeDayIndex) || tripDays[0];
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden">
+    <div className="flex flex-col h-screen w-screen overflow-hidden bg-white">
       <header className="h-[60px] shrink-0 px-4 md:px-6 border-b border-gray-200 bg-white flex items-center justify-between z-20 gap-3">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-xl shrink-0" role="img" aria-label="jeju">
@@ -2162,9 +2191,7 @@ export default function PlannerWorkspace({
               )}
             </div>
 
-            {viewMode === "map" && (
-              <div id="map" className="w-full h-full bg-gray-200" />
-            )}
+            <div id="map" className="w-full h-full bg-gray-200" />
           </section>
 
           <section className="w-full h-1/2 md:w-[40%] md:h-full overflow-y-auto bg-white p-6 md:p-10">
@@ -2514,9 +2541,9 @@ export default function PlannerWorkspace({
           </section>
         </main>
       ) : (
-        <main className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden bg-gray-50/60">
+        <main className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden bg-white relative z-30">
           <section className="w-full h-3/5 md:w-[60%] md:h-full flex flex-col border-b md:border-b-0 md:border-r border-gray-200 bg-white min-h-0 overflow-hidden">
-            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between gap-3 shrink-0">
+            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between gap-3 shrink-0 bg-white">
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold">
@@ -2547,7 +2574,7 @@ export default function PlannerWorkspace({
               </button>
             </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-2">
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-2 bg-white">
               {TIME_SLOTS.map((slot) => {
                 const slotItems = currentDayScheduleItems.filter(
                   (it) => it.timeSlot === slot
@@ -2653,17 +2680,17 @@ export default function PlannerWorkspace({
               })}
             </div>
 
-            <div className="shrink-0 border-t border-gray-200 bg-white px-4 py-2.5 flex items-center justify-center gap-2 z-20">
+            <div className="shrink-0 border-t border-gray-200 bg-white px-3 py-2.5 flex items-center justify-between gap-2 z-30">
               <button
                 type="button"
                 disabled={activeDayIndex <= 1}
                 onClick={() => setActiveDayIndex((prev) => Math.max(1, prev - 1))}
-                className="px-3 py-1.5 rounded-full text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 disabled:opacity-35 disabled:pointer-events-none shrink-0 cursor-pointer"
+                className="px-2.5 py-1.5 rounded-full text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 disabled:opacity-35 disabled:pointer-events-none shrink-0 cursor-pointer"
               >
                 ◀ 이전
               </button>
 
-              <div className="flex items-center gap-1 overflow-x-auto px-1">
+              <div className="flex items-center gap-1 overflow-x-auto flex-1 min-w-0 justify-center px-1">
                 {tripDays.map((day) => {
                   const isCurrentDay = day.dayIndex === activeDayIndex;
                   return (
@@ -2689,7 +2716,7 @@ export default function PlannerWorkspace({
                 onClick={() =>
                   setActiveDayIndex((prev) => Math.min(tripDays.length, prev + 1))
                 }
-                className="px-3 py-1.5 rounded-full text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 disabled:opacity-35 disabled:pointer-events-none shrink-0 cursor-pointer"
+                className="px-2.5 py-1.5 rounded-full text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 disabled:opacity-35 disabled:pointer-events-none shrink-0 cursor-pointer"
               >
                 다음 ▶
               </button>
@@ -2714,7 +2741,7 @@ export default function PlannerWorkspace({
 
               {visiblePlaces.length === 0 ? (
                 <div className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center text-sm text-gray-400">
-                  아직 저장된 장소가 없습니다. ‘지도로 돌아가기’를 눌러 장소를 먼저
+                  아직 저장된 장소가 없습니다. &lsquo;지도로 돌아가기&rsquo;를 눌러 장소를 먼저
                   저장해 보세요!
                 </div>
               ) : (
