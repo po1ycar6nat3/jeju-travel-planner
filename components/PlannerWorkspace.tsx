@@ -162,6 +162,82 @@ function isMembersMetaPlace(place: PlaceItem): boolean {
   return place.id === MEMBERS_META_ID || place.title === "__MEMBERS__";
 }
 
+function parsePlacesAndMembersPayload(
+  rawPlaces: unknown,
+  rawMembers?: unknown,
+  rawDeletedMembers?: unknown
+): {
+  parsedPlaces: PlaceItem[];
+  parsedMembers: string[];
+  parsedDeletedMembers: string[];
+} {
+  const realPlaces: PlaceItem[] = [];
+  let metaMembers: string[] = [];
+  let metaDeletedMembers: string[] = [];
+
+  if (Array.isArray(rawPlaces)) {
+    for (const item of rawPlaces) {
+      if (!item || typeof item !== "object") continue;
+      const candidate = item as PlaceItem & {
+        members?: unknown;
+        deletedMembers?: unknown;
+      };
+      if (isMembersMetaPlace(candidate)) {
+        if (Array.isArray(candidate.members)) {
+          metaMembers = candidate.members.filter(
+            (m): m is string => typeof m === "string" && Boolean(m.trim())
+          );
+        }
+        if (Array.isArray(candidate.deletedMembers)) {
+          metaDeletedMembers = candidate.deletedMembers.filter(
+            (m): m is string => typeof m === "string" && Boolean(m.trim())
+          );
+        }
+      } else if (
+        typeof candidate.id === "number" &&
+        typeof candidate.lat === "number" &&
+        typeof candidate.lng === "number" &&
+        typeof candidate.title === "string"
+      ) {
+        realPlaces.push({
+          id: candidate.id,
+          lat: candidate.lat,
+          lng: candidate.lng,
+          title: candidate.title,
+          memo: typeof candidate.memo === "string" ? candidate.memo : "",
+          createdBy:
+            typeof candidate.createdBy === "string" && candidate.createdBy.trim()
+              ? candidate.createdBy.trim()
+              : "익명",
+          categoryType: candidate.categoryType,
+          isMustVisit: Boolean(candidate.isMustVisit),
+        });
+      }
+    }
+  }
+
+  const directMembers = Array.isArray(rawMembers)
+    ? rawMembers.filter((m): m is string => typeof m === "string" && Boolean(m.trim()))
+    : [];
+
+  const directDeleted = Array.isArray(rawDeletedMembers)
+    ? rawDeletedMembers.filter((m): m is string => typeof m === "string" && Boolean(m.trim()))
+    : [];
+
+  const mergedDeleted = Array.from(new Set([...directDeleted, ...metaDeletedMembers]));
+  const deletedSet = new Set(mergedDeleted);
+
+  const mergedMembers = Array.from(
+    new Set([...directMembers, ...metaMembers])
+  ).filter((name) => !deletedSet.has(name));
+
+  return {
+    parsedPlaces: realPlaces,
+    parsedMembers: mergedMembers,
+    parsedDeletedMembers: mergedDeleted,
+  };
+}
+
 function buildNaverMapCoordUrl(title: string, lat: number, lng: number): string {
   const safeTitle = title.trim();
   if (safeTitle) {
@@ -172,6 +248,35 @@ function buildNaverMapCoordUrl(title: string, lat: number, lng: number): string 
 
 function getMemberStorageKey(id?: string): string {
   return `jeju_planner_members_${id || "default"}`;
+}
+
+function getDeletedMemberStorageKey(id?: string): string {
+  return `jeju_planner_deleted_members_${id || "default"}`;
+}
+
+function getActivePlanStorageKey(): string {
+  return "jeju_planner_active_plan_id";
+}
+
+function loadStoredPlanId(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const val = window.localStorage.getItem(getActivePlanStorageKey());
+    return val && val.trim() ? val.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function saveStoredPlanId(id?: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (id && id.trim()) {
+      window.localStorage.setItem(getActivePlanStorageKey(), id.trim());
+    }
+  } catch {
+    // 무시
+  }
 }
 
 function loadStoredMembers(id?: string): string[] {
@@ -197,11 +302,36 @@ function saveStoredMembers(id: string | undefined, list: string[]): void {
   }
 }
 
+function loadStoredDeletedMembers(id?: string): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(getDeletedMemberStorageKey(id));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((v): v is string => typeof v === "string" && Boolean(v.trim()))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredDeletedMembers(id: string | undefined, list: string[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(getDeletedMemberStorageKey(id), JSON.stringify(list));
+  } catch {
+    // 스토리지 제한 무시
+  }
+}
+
 function mergeMembers(
   initialMembers: string[] = [],
   places: PlaceItem[] = [],
-  storedMembers: string[] = []
+  storedMembers: string[] = [],
+  deletedMembers: string[] = []
 ): string[] {
+  const deletedSet = new Set(deletedMembers.map((m) => m.trim()).filter(Boolean));
   const fromPlaces = places
     .filter((p) => !isMembersMetaPlace(p))
     .map((p) => p.createdBy?.trim())
@@ -213,7 +343,7 @@ function mergeMembers(
       ...storedMembers.map((m) => m.trim()).filter(Boolean),
       ...fromPlaces,
     ])
-  );
+  ).filter((name) => !deletedSet.has(name));
 }
 
 export default function PlannerWorkspace({
@@ -223,13 +353,27 @@ export default function PlannerWorkspace({
   initialMembers = [],
 }: PlannerWorkspaceProps) {
   const router = useRouter();
-  const cleanInitialPlaces = initialPlaces.filter((p) => !isMembersMetaPlace(p));
+  const initialPlanKey = planId || loadStoredPlanId();
+  const initialDeleted = loadStoredDeletedMembers(initialPlanKey);
+  const initialParsed = parsePlacesAndMembersPayload(
+    initialPlaces,
+    initialMembers,
+    initialDeleted
+  );
 
-  const [currentPlanId, setCurrentPlanId] = useState<string | undefined>(planId);
+  const [currentPlanId, setCurrentPlanId] = useState<string | undefined>(initialPlanKey);
   const [planTitle, setPlanTitle] = useState(initialTitle);
-  const [places, setPlaces] = useState<PlaceItem[]>(cleanInitialPlaces);
+  const [places, setPlaces] = useState<PlaceItem[]>(initialParsed.parsedPlaces);
+  const [deletedMembers, setDeletedMembers] = useState<string[]>(
+    initialParsed.parsedDeletedMembers
+  );
   const [members, setMembers] = useState<string[]>(() =>
-    mergeMembers(initialMembers, cleanInitialPlaces, loadStoredMembers(planId))
+    mergeMembers(
+      initialParsed.parsedMembers,
+      initialParsed.parsedPlaces,
+      loadStoredMembers(initialPlanKey),
+      initialParsed.parsedDeletedMembers
+    )
   );
   const [activeUser, setActiveUser] = useState<string | null>(null);
 
@@ -260,10 +404,11 @@ export default function PlannerWorkspace({
   const [draftCategory, setDraftCategory] = useState<PlaceCategory>("sightseeing");
   const [draftMustVisit, setDraftMustVisit] = useState(false);
 
-  const isFirstMountRef = useRef(true);
+  const hasHydratedFromDbRef = useRef(false);
   const isApplyingRemoteRef = useRef(false);
+  const hasUserMutatedRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const currentPlanIdRef = useRef<string | undefined>(planId);
+  const currentPlanIdRef = useRef<string | undefined>(currentPlanId);
   const previousViewportRef = useRef<MapViewportSnapshot | null>(null);
   const selectedPlaceIdRef = useRef<number | null>(null);
 
@@ -280,7 +425,7 @@ export default function PlannerWorkspace({
     return matchesCategory && matchesMustVisit && matchesUser;
   });
 
-  const filterableUsers = mergeMembers(members, visiblePlaces, []);
+  const filterableUsers = mergeMembers(members, visiblePlaces, [], deletedMembers);
 
   useEffect(() => {
     selectedPlaceIdRef.current = selectedPlaceId;
@@ -288,31 +433,101 @@ export default function PlannerWorkspace({
 
   useEffect(() => {
     currentPlanIdRef.current = currentPlanId;
+    if (currentPlanId) {
+      saveStoredPlanId(currentPlanId);
+    }
     saveStoredMembers(currentPlanId, members);
-  }, [currentPlanId, members]);
+    saveStoredDeletedMembers(currentPlanId, deletedMembers);
+  }, [currentPlanId, members, deletedMembers]);
+
+  const hydratePlanFromServer = useCallback(async (targetId?: string) => {
+    try {
+      let row: {
+        id?: string;
+        title?: string;
+        places?: unknown;
+        members?: unknown;
+      } | null = null;
+
+      if (targetId) {
+        const { data, error } = await supabase
+          .from("travel_plans")
+          .select("*")
+          .eq("id", targetId)
+          .maybeSingle();
+        if (!error && data) {
+          row = data;
+        }
+      }
+
+      if (!row) {
+        const { data, error } = await supabase
+          .from("travel_plans")
+          .select("*")
+          .order("updated_at", { ascending: false })
+          .limit(1);
+        if (!error && Array.isArray(data) && data.length > 0) {
+          row = data[0];
+        }
+      }
+
+      if (row) {
+        const resolvedId = typeof row.id === "string" && row.id ? row.id : targetId;
+        if (resolvedId) {
+          currentPlanIdRef.current = resolvedId;
+          setCurrentPlanId(resolvedId);
+          saveStoredPlanId(resolvedId);
+        }
+
+        const localDeleted = loadStoredDeletedMembers(resolvedId);
+        const localMembers = loadStoredMembers(resolvedId);
+        const { parsedPlaces, parsedMembers, parsedDeletedMembers } =
+          parsePlacesAndMembersPayload(row.places, row.members, localDeleted);
+
+        const nextDeleted = Array.from(new Set([...parsedDeletedMembers, ...localDeleted]));
+        const nextMembers = mergeMembers(
+          [...parsedMembers, ...localMembers],
+          parsedPlaces,
+          [],
+          nextDeleted
+        );
+
+        isApplyingRemoteRef.current = true;
+        if (typeof row.title === "string" && row.title.trim()) {
+          setPlanTitle(row.title);
+        }
+        setPlaces((prev) => {
+          const currentReal = prev.filter((p) => !isMembersMetaPlace(p));
+          if (parsedPlaces.length === 0 && currentReal.length > 0 && hasUserMutatedRef.current) {
+            return currentReal;
+          }
+          return parsedPlaces;
+        });
+        setDeletedMembers(nextDeleted);
+        setMembers(nextMembers);
+        saveStoredDeletedMembers(resolvedId, nextDeleted);
+        saveStoredMembers(resolvedId, nextMembers);
+        setSyncStatus("saved");
+        setTimeout(() => {
+          isApplyingRemoteRef.current = false;
+        }, 120);
+      }
+    } catch (err) {
+      console.error("일정 불러오기 실패:", err);
+    } finally {
+      hasHydratedFromDbRef.current = true;
+    }
+  }, []);
 
   useEffect(() => {
-    setCurrentPlanId(planId);
-    currentPlanIdRef.current = planId;
-    setMembers((prev) =>
-      mergeMembers(initialMembers, visiblePlaces, [...prev, ...loadStoredMembers(planId)])
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [planId]);
-
-  useEffect(() => {
-    isApplyingRemoteRef.current = true;
-    setPlanTitle(initialTitle);
-    const timer = setTimeout(() => {
-      isApplyingRemoteRef.current = false;
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [initialTitle]);
-
-  useEffect(() => {
-    setMembers((prev) => mergeMembers(initialMembers, visiblePlaces, prev));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMembers, places]);
+    const effectiveId = planId || loadStoredPlanId();
+    if (planId && planId !== currentPlanIdRef.current) {
+      currentPlanIdRef.current = planId;
+      setCurrentPlanId(planId);
+      saveStoredPlanId(planId);
+    }
+    hydratePlanFromServer(effectiveId);
+  }, [planId, hydratePlanFromServer]);
 
   const resetSelectionAndViewport = useCallback(() => {
     setSelectedPlaceId(null);
@@ -360,11 +575,17 @@ export default function PlannerWorkspace({
   }, [resetSelectionAndViewport]);
 
   const persistPlanToDb = useCallback(
-    async (nextTitle: string, nextPlaces: PlaceItem[], nextMembers: string[]) => {
-      saveStoredMembers(currentPlanIdRef.current, nextMembers);
+    async (
+      nextTitle: string,
+      nextPlaces: PlaceItem[],
+      nextMembers: string[],
+      nextDeletedMembers: string[] = deletedMembers
+    ) => {
+      const activeId = currentPlanIdRef.current;
+      saveStoredMembers(activeId, nextMembers);
+      saveStoredDeletedMembers(activeId, nextDeletedMembers);
       setSyncStatus("saving");
       try {
-        const activeId = currentPlanIdRef.current;
         const cleanPlaces = nextPlaces.filter((p) => !isMembersMetaPlace(p));
         const placesWithMembersMeta = [
           ...cleanPlaces,
@@ -375,7 +596,8 @@ export default function PlannerWorkspace({
             title: "__MEMBERS__",
             memo: "",
             members: nextMembers,
-          } as PlaceItem & { members: string[] },
+            deletedMembers: nextDeletedMembers,
+          } as PlaceItem & { members: string[]; deletedMembers: string[] },
         ];
 
         const payload = {
@@ -402,17 +624,25 @@ export default function PlannerWorkspace({
           if (data?.id) {
             const oldKey = getMemberStorageKey(undefined);
             const newKey = getMemberStorageKey(data.id);
+            const oldDelKey = getDeletedMemberStorageKey(undefined);
+            const newDelKey = getDeletedMemberStorageKey(data.id);
             try {
               const existingOld = window.localStorage.getItem(oldKey);
               if (existingOld && !window.localStorage.getItem(newKey)) {
                 window.localStorage.setItem(newKey, existingOld);
+              }
+              const existingDelOld = window.localStorage.getItem(oldDelKey);
+              if (existingDelOld && !window.localStorage.getItem(newDelKey)) {
+                window.localStorage.setItem(newDelKey, existingDelOld);
               }
             } catch {
               // 무시
             }
             currentPlanIdRef.current = data.id;
             setCurrentPlanId(data.id);
+            saveStoredPlanId(data.id);
             saveStoredMembers(data.id, nextMembers);
+            saveStoredDeletedMembers(data.id, nextDeletedMembers);
             router.replace(`/plan/${data.id}`);
           }
         }
@@ -423,25 +653,21 @@ export default function PlannerWorkspace({
         setSyncStatus("error");
       }
     },
-    [router]
+    [deletedMembers, router]
   );
 
   useEffect(() => {
-    if (isFirstMountRef.current) {
-      isFirstMountRef.current = false;
-      return;
-    }
-    if (isApplyingRemoteRef.current) {
-      return;
-    }
+    if (!hasHydratedFromDbRef.current) return;
+    if (isApplyingRemoteRef.current) return;
+    if (!hasUserMutatedRef.current) return;
 
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
     }
 
     saveTimerRef.current = setTimeout(() => {
-      persistPlanToDb(planTitle, visiblePlaces, members);
-    }, 350);
+      persistPlanToDb(planTitle, visiblePlaces, members, deletedMembers);
+    }, 300);
 
     return () => {
       if (saveTimerRef.current) {
@@ -449,7 +675,7 @@ export default function PlannerWorkspace({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [places, planTitle, members, persistPlanToDb]);
+  }, [places, planTitle, members, deletedMembers, persistPlanToDb]);
 
   useEffect(() => {
     if (!currentPlanId) return;
@@ -467,8 +693,8 @@ export default function PlannerWorkspace({
         (payload) => {
           const updated = payload.new as {
             title?: string;
-            places?: Array<PlaceItem & { members?: unknown }>;
-            members?: string[];
+            places?: unknown;
+            members?: unknown;
           };
           if (!updated) return;
 
@@ -476,39 +702,27 @@ export default function PlannerWorkspace({
             clearTimeout(saveTimerRef.current);
           }
 
+          const { parsedPlaces, parsedMembers, parsedDeletedMembers } =
+            parsePlacesAndMembersPayload(
+              updated.places,
+              updated.members,
+              deletedMembers
+            );
+
           isApplyingRemoteRef.current = true;
-          if (typeof updated.title === "string") {
+          if (typeof updated.title === "string" && updated.title.trim()) {
             setPlanTitle(updated.title);
           }
-
-          let metaMembers: string[] = [];
-          if (Array.isArray(updated.places)) {
-            const realPlaces: PlaceItem[] = [];
-            for (const item of updated.places) {
-              if (!item) continue;
-              if (isMembersMetaPlace(item)) {
-                if (Array.isArray(item.members)) {
-                  metaMembers = item.members.filter(
-                    (m): m is string => typeof m === "string" && Boolean(m.trim())
-                  );
-                }
-              } else {
-                realPlaces.push(item);
-              }
-            }
-            setPlaces(realPlaces);
-            setMembers((prev) =>
-              mergeMembers([...(updated.members || []), ...metaMembers], realPlaces, prev)
-            );
-          } else if (Array.isArray(updated.members)) {
-            setMembers((prev) => mergeMembers(updated.members || [], [], prev));
-          }
-
+          setPlaces(parsedPlaces);
+          setDeletedMembers(parsedDeletedMembers);
+          setMembers((prev) =>
+            mergeMembers(parsedMembers, parsedPlaces, prev, parsedDeletedMembers)
+          );
           setSyncStatus("saved");
 
           setTimeout(() => {
             isApplyingRemoteRef.current = false;
-          }, 100);
+          }, 120);
         }
       )
       .subscribe();
@@ -516,14 +730,14 @@ export default function PlannerWorkspace({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [currentPlanId]);
+  }, [currentPlanId, deletedMembers]);
 
   useEffect(() => {
     if (showUserGate) return;
 
     const initMap = () => {
       if (window.naver && window.naver.maps) {
-        const firstPlace = visiblePlaces[0] || cleanInitialPlaces[0];
+        const firstPlace = visiblePlaces[0];
         const centerLat = firstPlace ? firstPlace.lat : 33.3846;
         const centerLng = firstPlace ? firstPlace.lng : 126.5535;
         const zoomLevel = firstPlace ? 12 : 10;
@@ -717,25 +931,35 @@ export default function PlannerWorkspace({
     const trimmed = newUserName.trim();
     if (!trimmed) return;
 
-    const updatedMembers = mergeMembers(members, visiblePlaces, [trimmed]);
+    hasUserMutatedRef.current = true;
+    const nextDeleted = deletedMembers.filter((m) => m !== trimmed);
+    const updatedMembers = mergeMembers(members, visiblePlaces, [trimmed], nextDeleted);
+
+    setDeletedMembers(nextDeleted);
     setMembers(updatedMembers);
+    saveStoredDeletedMembers(currentPlanIdRef.current, nextDeleted);
     saveStoredMembers(currentPlanIdRef.current, updatedMembers);
     setActiveUser(trimmed);
     setNewUserName("");
     setShowUserGate(false);
 
-    await persistPlanToDb(planTitle, visiblePlaces, updatedMembers);
+    await persistPlanToDb(planTitle, visiblePlaces, updatedMembers, nextDeleted);
   };
 
-  const handlePickExistingUser = (name: string) => {
+  const handlePickExistingUser = async (name: string) => {
     setActiveUser(name);
     setShowUserGate(false);
+    await hydratePlanFromServer(currentPlanIdRef.current);
   };
 
-  // 사용자 삭제 (저장된 장소 및 저장했던 이름은 그대로 유지)
   const handleDeleteUser = async (targetName: string) => {
+    hasUserMutatedRef.current = true;
+    const nextDeleted = Array.from(new Set([...deletedMembers, targetName]));
     const nextMembers = members.filter((m) => m !== targetName);
+
+    setDeletedMembers(nextDeleted);
     setMembers(nextMembers);
+    saveStoredDeletedMembers(currentPlanIdRef.current, nextDeleted);
     saveStoredMembers(currentPlanIdRef.current, nextMembers);
 
     if (activeUser === targetName) {
@@ -745,7 +969,7 @@ export default function PlannerWorkspace({
       setSelectedUserFilter(null);
     }
 
-    await persistPlanToDb(planTitle, visiblePlaces, nextMembers);
+    await persistPlanToDb(planTitle, visiblePlaces, nextMembers, nextDeleted);
   };
 
   const handleSearch = async (e: React.FormEvent) => {
@@ -788,7 +1012,7 @@ export default function PlannerWorkspace({
     setSearchResults([]);
   };
 
-  const handleConfirmDraft = (e: React.FormEvent) => {
+  const handleConfirmDraft = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!draftPlace) return;
 
@@ -796,8 +1020,9 @@ export default function PlannerWorkspace({
     const finalMemo = draftMemo.trim();
     const creator = activeUser || "익명";
 
-    setPlaces((prev) => [
-      ...prev.filter((p) => !isMembersMetaPlace(p)),
+    hasUserMutatedRef.current = true;
+    const nextPlaces: PlaceItem[] = [
+      ...visiblePlaces,
       {
         id: Date.now(),
         lat: draftPlace.lat,
@@ -808,22 +1033,27 @@ export default function PlannerWorkspace({
         categoryType: draftCategory,
         isMustVisit: draftMustVisit,
       },
-    ]);
+    ];
 
+    setPlaces(nextPlaces);
     setDraftPlace(null);
     setDraftTitle("");
     setDraftMemo("");
     setDraftMustVisit(false);
     setSearchKeyword("");
+
+    await persistPlanToDb(planTitle, nextPlaces, members, deletedMembers);
   };
 
   const handleUpdateMemo = (id: number, nextMemo: string) => {
+    hasUserMutatedRef.current = true;
     setPlaces((prev) =>
       prev.map((p) => (p.id === id ? { ...p, memo: nextMemo } : p))
     );
   };
 
   const handleChangePlaceCategory = (id: number, nextCategory: PlaceCategory) => {
+    hasUserMutatedRef.current = true;
     setPlaces((prev) =>
       prev.map((p) => (p.id === id ? { ...p, categoryType: nextCategory } : p))
     );
@@ -831,12 +1061,14 @@ export default function PlannerWorkspace({
   };
 
   const handleTogglePlaceMustVisit = (id: number) => {
+    hasUserMutatedRef.current = true;
     setPlaces((prev) =>
       prev.map((p) => (p.id === id ? { ...p, isMustVisit: !p.isMustVisit } : p))
     );
   };
 
   const handleDeletePlace = (id: number) => {
+    hasUserMutatedRef.current = true;
     if (selectedPlaceId === id) {
       resetSelectionAndViewport();
     }
@@ -847,8 +1079,9 @@ export default function PlannerWorkspace({
   };
 
   const handleCopyShareLink = async () => {
-    if (!currentPlanId) {
-      await persistPlanToDb(planTitle, visiblePlaces, members);
+    if (!currentPlanIdRef.current) {
+      hasUserMutatedRef.current = true;
+      await persistPlanToDb(planTitle, visiblePlaces, members, deletedMembers);
     }
     const targetId = currentPlanIdRef.current;
     if (!targetId) return;
@@ -1323,7 +1556,10 @@ export default function PlannerWorkspace({
                 <input
                   type="text"
                   value={planTitle}
-                  onChange={(e) => setPlanTitle(e.target.value)}
+                  onChange={(e) => {
+                    hasUserMutatedRef.current = true;
+                    setPlanTitle(e.target.value);
+                  }}
                   className="w-full text-2xl font-bold text-gray-900 tracking-tight border-b border-transparent hover:border-gray-200 focus:border-emerald-500 outline-none pb-1"
                 />
                 <p className="text-sm text-gray-500 mt-1">
