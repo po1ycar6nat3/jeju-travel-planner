@@ -576,7 +576,6 @@ export default function PlannerWorkspace({
   const [showUserGate, setShowUserGate] = useState<boolean>(Boolean(planId));
 
   const [viewMode, setViewMode] = useState<WorkspaceViewMode>("map");
-  const [isPlacePanelHidden, setIsPlacePanelHidden] = useState<boolean>(false);
   const [activeDayIndex, setActiveDayIndex] = useState<number>(1);
   const [selectedTimeSlot, setSelectedTimeSlot] = useState<string>("09:00");
 
@@ -638,6 +637,11 @@ export default function PlannerWorkspace({
 
   const filterableUsers = mergePlanMembers(members, visiblePlaces, deletedMembers);
 
+  const currentDayScheduleItems = useMemo(
+    () => scheduleConfig.items.filter((item) => item.dayIndex === activeDayIndex),
+    [scheduleConfig.items, activeDayIndex]
+  );
+
   useEffect(() => {
     selectedPlaceIdRef.current = selectedPlaceId;
   }, [selectedPlaceId]);
@@ -649,19 +653,6 @@ export default function PlannerWorkspace({
       saveStoredDeletedMembers(currentPlanId, deletedMembers);
     }
   }, [currentPlanId, members, deletedMembers]);
-
-  // 우측 패널 접기/펼치기 시 네이버 지도 크기 재계산
-  useEffect(() => {
-    if (!mapInstance || !window.naver || viewMode !== "map") return;
-    const timer = setTimeout(() => {
-      try {
-        window.naver.maps.Event.trigger(mapInstance, "resize");
-      } catch {
-        // 무시
-      }
-    }, 60);
-    return () => clearTimeout(timer);
-  }, [isPlacePanelHidden, mapInstance, viewMode]);
 
   const refreshAllPlansList = useCallback(async () => {
     try {
@@ -912,7 +903,6 @@ export default function PlannerWorkspace({
       setSelectedUserFilter(null);
       setActiveDayIndex(1);
       setViewMode("map");
-      setIsPlacePanelHidden(false);
 
       const res = await fetch("/api/plans", {
         method: "POST",
@@ -976,7 +966,6 @@ export default function PlannerWorkspace({
     setSelectedUserFilter(null);
     setActiveDayIndex(1);
     setViewMode("map");
-    setIsPlacePanelHidden(false);
     hasHydratedFromDbRef.current = false;
     await hydratePlanFromServer(targetPlanId);
     setShowPlanGate(false);
@@ -1964,28 +1953,8 @@ export default function PlannerWorkspace({
 
       {viewMode === "map" ? (
         <main className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden">
-          <section
-            className={`w-full relative overflow-hidden transition-all duration-200 ${
-              isPlacePanelHidden
-                ? "h-full md:w-full"
-                : "h-1/2 md:w-[60%] md:h-full border-b md:border-b-0 md:border-r border-gray-200"
-            }`}
-          >
+          <section className="w-full h-1/2 md:w-[60%] md:h-full relative border-b md:border-b-0 md:border-r border-gray-200 overflow-hidden">
             <div className="flex items-center gap-1.5 absolute top-4 right-4 z-20">
-              <button
-                type="button"
-                onClick={() => setIsPlacePanelHidden((prev) => !prev)}
-                className={`px-3 py-2 rounded-lg text-xs font-semibold shadow-md transition-colors cursor-pointer inline-flex items-center gap-1.5 border ${
-                  isPlacePanelHidden
-                    ? "bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600"
-                    : "bg-white/95 hover:bg-gray-50 text-gray-800 border-gray-200"
-                }`}
-                title={isPlacePanelHidden ? "장소 목록 보기" : "장소 목록 숨기고 지도 크게 보기"}
-              >
-                <span>{isPlacePanelHidden ? "📋" : "⛶"}</span>
-                <span>{isPlacePanelHidden ? "목록 보기" : "지도 크게"}</span>
-              </button>
-
               <button
                 type="button"
                 onClick={() => setViewMode("schedule")}
@@ -2032,7 +2001,7 @@ export default function PlannerWorkspace({
               </div>
             </div>
 
-            <div className="absolute top-4 left-4 right-36 sm:right-88 md:right-auto md:w-88 z-20">
+            <div className="absolute top-4 left-4 right-28 sm:right-68 md:right-auto md:w-88 z-20">
               <form
                 onSubmit={handleSearch}
                 className="flex shadow-md rounded-lg overflow-hidden bg-white border border-gray-200"
@@ -2192,353 +2161,351 @@ export default function PlannerWorkspace({
             <div id="map" className="w-full h-full bg-gray-200" />
           </section>
 
-          {!isPlacePanelHidden && (
-            <section className="w-full h-1/2 md:w-[40%] md:h-full overflow-y-auto bg-white p-6 md:p-10">
-              <div className="max-w-2xl mx-auto">
-                {selectedPlace && selectedCategoryStyle && (
-                  <div
-                    className={`mb-6 p-4 rounded-2xl border-2 shadow-sm space-y-2.5 relative ${selectedCategoryStyle.cardBorder} ${selectedCategoryStyle.cardSelectedBg}`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-xs font-bold ${selectedCategoryStyle.badgeBg}`}
-                        >
-                          <span>{selectedCategoryStyle.icon}</span>
-                          <span>{selectedCategoryStyle.label}</span>
-                        </span>
-                        {selectedPlace.isMustVisit && (
-                          <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200 text-[11px] font-bold">
-                            ⭐ 꼭 가고 싶은 곳
-                          </span>
-                        )}
-                        <span className="text-xs font-semibold text-gray-600">
-                          #{selectedIndex + 1}
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={resetSelectionAndViewport}
-                        className="text-xs font-medium text-gray-700 hover:text-gray-950 bg-white/90 px-2.5 py-1 rounded-md border border-gray-200 cursor-pointer"
+          <section className="w-full h-1/2 md:w-[40%] md:h-full overflow-y-auto bg-white p-6 md:p-10">
+            <div className="max-w-2xl mx-auto">
+              {selectedPlace && selectedCategoryStyle && (
+                <div
+                  className={`mb-6 p-4 rounded-2xl border-2 shadow-sm space-y-2.5 relative ${selectedCategoryStyle.cardBorder} ${selectedCategoryStyle.cardSelectedBg}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-xs font-bold ${selectedCategoryStyle.badgeBg}`}
                       >
-                        원위치로 닫기
-                      </button>
+                        <span>{selectedCategoryStyle.icon}</span>
+                        <span>{selectedCategoryStyle.label}</span>
+                      </span>
+                      {selectedPlace.isMustVisit && (
+                        <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200 text-[11px] font-bold">
+                          ⭐ 꼭 가고 싶은 곳
+                        </span>
+                      )}
+                      <span className="text-xs font-semibold text-gray-600">
+                        #{selectedIndex + 1}
+                      </span>
                     </div>
-
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1">
-                        <h2 className="text-lg font-bold text-gray-900">{selectedPlace.title}</h2>
-                        <input
-                          type="text"
-                          value={selectedPlace.memo}
-                          onChange={(e) => handleUpdateMemo(selectedPlace.id, e.target.value)}
-                          placeholder="멘트를 입력해 보세요..."
-                          className="w-full text-sm text-gray-700 mt-1.5 px-2.5 py-1.5 rounded-lg bg-white border border-gray-200 focus:border-emerald-500 outline-none"
-                        />
-                        <div className="mt-2 flex items-center justify-between gap-2">
-                          <a
-                            href={buildNaverMapCoordUrl(
-                              selectedPlace.title,
-                              selectedPlace.lat,
-                              selectedPlace.lng
-                            )}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:text-emerald-900 underline underline-offset-2"
-                          >
-                            네이버 지도에서 열기 ↗
-                          </a>
-                          <span className="text-[11px] text-gray-400 select-none">
-                            by {selectedPlace.createdBy || "익명"}
-                          </span>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleDeletePlace(selectedPlace.id)}
-                        className="text-xs text-red-600 hover:text-red-700 font-medium px-2 py-1 rounded cursor-pointer shrink-0"
-                      >
-                        삭제
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-                  <div className="flex-1 min-w-[200px]">
-                    <input
-                      type="text"
-                      value={planTitle}
-                      onChange={(e) => {
-                        hasUserMutatedRef.current = true;
-                        setPlanTitle(e.target.value);
-                      }}
-                      className="w-full text-2xl font-bold text-gray-900 tracking-tight border-b border-transparent hover:border-gray-200 focus:border-emerald-500 outline-none pb-1"
-                    />
-                    <p className="text-sm text-gray-500 mt-1">
-                      카테고리 아이콘이나 ⭐ 표시를 눌러 필터링하고 상태를 바꿀 수 있습니다.
-                    </p>
-                  </div>
-
-                  <div className="relative flex items-center gap-1 bg-gray-100 p-1 rounded-lg text-xs shrink-0">
                     <button
                       type="button"
-                      onClick={() => {
-                        setSelectedUserFilter(null);
-                        setIsUserFilterOpen(false);
-                      }}
-                      className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
-                        selectedUserFilter === null
-                          ? "bg-white text-gray-900 shadow-2xs"
-                          : "text-gray-500 hover:text-gray-800"
-                      }`}
+                      onClick={resetSelectionAndViewport}
+                      className="text-xs font-medium text-gray-700 hover:text-gray-950 bg-white/90 px-2.5 py-1 rounded-md border border-gray-200 cursor-pointer"
                     >
-                      등록순
+                      원위치로 닫기
                     </button>
+                  </div>
+
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1">
+                      <h2 className="text-lg font-bold text-gray-900">{selectedPlace.title}</h2>
+                      <input
+                        type="text"
+                        value={selectedPlace.memo}
+                        onChange={(e) => handleUpdateMemo(selectedPlace.id, e.target.value)}
+                        placeholder="멘트를 입력해 보세요..."
+                        className="w-full text-sm text-gray-700 mt-1.5 px-2.5 py-1.5 rounded-lg bg-white border border-gray-200 focus:border-emerald-500 outline-none"
+                      />
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <a
+                          href={buildNaverMapCoordUrl(
+                            selectedPlace.title,
+                            selectedPlace.lat,
+                            selectedPlace.lng
+                          )}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:text-emerald-900 underline underline-offset-2"
+                        >
+                          네이버 지도에서 열기 ↗
+                        </a>
+                        <span className="text-[11px] text-gray-400 select-none">
+                          by {selectedPlace.createdBy || "익명"}
+                        </span>
+                      </div>
+                    </div>
                     <button
                       type="button"
-                      onClick={() => setIsUserFilterOpen((prev) => !prev)}
-                      className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer inline-flex items-center gap-1 ${
-                        selectedUserFilter !== null
-                          ? "bg-white text-emerald-700 shadow-2xs font-semibold"
-                          : "text-gray-500 hover:text-gray-800"
-                      }`}
+                      onClick={() => handleDeletePlace(selectedPlace.id)}
+                      className="text-xs text-red-600 hover:text-red-700 font-medium px-2 py-1 rounded cursor-pointer shrink-0"
                     >
-                      <span>{selectedUserFilter ? `👤 ${selectedUserFilter}` : "이름 선택"}</span>
-                      <span className="text-[10px]">▾</span>
+                      삭제
                     </button>
-
-                    {isUserFilterOpen && (
-                      <div className="absolute right-0 top-9 z-30 min-w-[140px] bg-white border border-gray-200 rounded-xl shadow-lg p-1.5 space-y-0.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedUserFilter(null);
-                            setIsUserFilterOpen(false);
-                          }}
-                          className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-colors cursor-pointer ${
-                            selectedUserFilter === null
-                              ? "bg-emerald-50 text-emerald-700 font-semibold"
-                              : "text-gray-700 hover:bg-gray-100"
-                          }`}
-                        >
-                          전체 보기
-                        </button>
-                        {filterableUsers.length === 0 ? (
-                          <div className="px-2.5 py-1.5 text-[11px] text-gray-400">
-                            등록된 사용자 없음
-                          </div>
-                        ) : (
-                          filterableUsers.map((userName) => (
-                            <button
-                              key={userName}
-                              type="button"
-                              onClick={() => {
-                                setSelectedUserFilter(userName);
-                                setIsUserFilterOpen(false);
-                              }}
-                              className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-colors cursor-pointer flex items-center justify-between ${
-                                selectedUserFilter === userName
-                                  ? "bg-emerald-50 text-emerald-700 font-semibold"
-                                  : "text-gray-700 hover:bg-gray-100"
-                              }`}
-                            >
-                              <span>{userName}</span>
-                              {selectedUserFilter === userName && <span>✓</span>}
-                            </button>
-                          ))
-                        )}
-                      </div>
-                    )}
                   </div>
                 </div>
+              )}
 
-                <div className="mb-6 flex items-center gap-1.5 flex-wrap">
+              <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+                <div className="flex-1 min-w-[200px]">
+                  <input
+                    type="text"
+                    value={planTitle}
+                    onChange={(e) => {
+                      hasUserMutatedRef.current = true;
+                      setPlanTitle(e.target.value);
+                    }}
+                    className="w-full text-2xl font-bold text-gray-900 tracking-tight border-b border-transparent hover:border-gray-200 focus:border-emerald-500 outline-none pb-1"
+                  />
+                  <p className="text-sm text-gray-500 mt-1">
+                    카테고리 아이콘이나 ⭐ 표시를 눌러 필터링하고 상태를 바꿀 수 있습니다.
+                  </p>
+                </div>
+
+                <div className="relative flex items-center gap-1 bg-gray-100 p-1 rounded-lg text-xs shrink-0">
                   <button
                     type="button"
-                    onClick={handleResetAllCategoryFilters}
-                    className={`px-2.5 py-1 rounded-full border text-xs font-semibold transition-colors cursor-pointer ${
-                      isAllFilterActive
-                        ? "bg-gray-900 text-white border-gray-900"
-                        : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+                    onClick={() => {
+                      setSelectedUserFilter(null);
+                      setIsUserFilterOpen(false);
+                    }}
+                    className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
+                      selectedUserFilter === null
+                        ? "bg-white text-gray-900 shadow-2xs"
+                        : "text-gray-500 hover:text-gray-800"
                     }`}
                   >
-                    전체
+                    등록순
                   </button>
-                  {CATEGORY_ORDER.map((catKey) => {
-                    const cStyle = CATEGORY_STYLES[catKey];
-                    const isSelectedCat = selectedCategories.includes(catKey);
-                    return (
+                  <button
+                    type="button"
+                    onClick={() => setIsUserFilterOpen((prev) => !prev)}
+                    className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer inline-flex items-center gap-1 ${
+                      selectedUserFilter !== null
+                        ? "bg-white text-emerald-700 shadow-2xs font-semibold"
+                        : "text-gray-500 hover:text-gray-800"
+                    }`}
+                  >
+                    <span>{selectedUserFilter ? `👤 ${selectedUserFilter}` : "이름 선택"}</span>
+                    <span className="text-[10px]">▾</span>
+                  </button>
+
+                  {isUserFilterOpen && (
+                    <div className="absolute right-0 top-9 z-30 min-w-[140px] bg-white border border-gray-200 rounded-xl shadow-lg p-1.5 space-y-0.5">
                       <button
-                        key={catKey}
                         type="button"
-                        onClick={() => handleToggleCategoryFilter(catKey)}
-                        className={`px-2.5 py-1 rounded-full border text-xs font-semibold inline-flex items-center gap-1 transition-all cursor-pointer ${
-                          isSelectedCat
-                            ? `${cStyle.badgeBg} ring-2 ring-offset-1 ring-gray-300`
-                            : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+                        onClick={() => {
+                          setSelectedUserFilter(null);
+                          setIsUserFilterOpen(false);
+                        }}
+                        className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-colors cursor-pointer ${
+                          selectedUserFilter === null
+                            ? "bg-emerald-50 text-emerald-700 font-semibold"
+                            : "text-gray-700 hover:bg-gray-100"
                         }`}
                       >
-                        <span>{cStyle.icon}</span>
-                        <span>{cStyle.label}</span>
+                        전체 보기
                       </button>
-                    );
-                  })}
-
-                  <button
-                    type="button"
-                    onClick={() => setOnlyMustVisitFilter((prev) => !prev)}
-                    title="꼭 가고 싶은 곳만 보기"
-                    className={`px-2.5 py-1 rounded-full border text-xs font-semibold inline-flex items-center justify-center transition-all cursor-pointer ${
-                      onlyMustVisitFilter
-                        ? "bg-amber-100 text-amber-800 border-amber-300 ring-2 ring-offset-1 ring-amber-300"
-                        : "bg-white text-gray-600 border-gray-200 hover:bg-amber-50/60"
-                    }`}
-                  >
-                    ⭐
-                  </button>
+                      {filterableUsers.length === 0 ? (
+                        <div className="px-2.5 py-1.5 text-[11px] text-gray-400">
+                          등록된 사용자 없음
+                        </div>
+                      ) : (
+                        filterableUsers.map((userName) => (
+                          <button
+                            key={userName}
+                            type="button"
+                            onClick={() => {
+                              setSelectedUserFilter(userName);
+                              setIsUserFilterOpen(false);
+                            }}
+                            className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-colors cursor-pointer flex items-center justify-between ${
+                              selectedUserFilter === userName
+                                ? "bg-emerald-50 text-emerald-700 font-semibold"
+                                : "text-gray-700 hover:bg-gray-100"
+                            }`}
+                          >
+                            <span>{userName}</span>
+                            {selectedUserFilter === userName && <span>✓</span>}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
                 </div>
+              </div>
 
-                {filteredPlaces.length === 0 ? (
-                  <div className="text-gray-400 text-sm border-2 border-dashed border-gray-200 rounded-xl p-10 text-center bg-gray-50/50">
-                    {visiblePlaces.length === 0
-                      ? "아직 추가된 장소가 없습니다. 검색으로 장소를 추가해 보세요! 🗺️"
-                      : "선택한 필터 조건에 해당하는 장소가 없습니다."}
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {filteredPlaces.map((p, index) => {
-                      const isSelected = p.id === selectedPlaceId;
-                      const isEditingCategory = editingCategoryPlaceId === p.id;
-                      const cat = getPlaceCategory(p);
-                      const cStyle = CATEGORY_STYLES[cat];
+              <div className="mb-6 flex items-center gap-1.5 flex-wrap">
+                <button
+                  type="button"
+                  onClick={handleResetAllCategoryFilters}
+                  className={`px-2.5 py-1 rounded-full border text-xs font-semibold transition-colors cursor-pointer ${
+                    isAllFilterActive
+                      ? "bg-gray-900 text-white border-gray-900"
+                      : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+                  }`}
+                >
+                  전체
+                </button>
+                {CATEGORY_ORDER.map((catKey) => {
+                  const cStyle = CATEGORY_STYLES[catKey];
+                  const isSelectedCat = selectedCategories.includes(catKey);
+                  return (
+                    <button
+                      key={catKey}
+                      type="button"
+                      onClick={() => handleToggleCategoryFilter(catKey)}
+                      className={`px-2.5 py-1 rounded-full border text-xs font-semibold inline-flex items-center gap-1 transition-all cursor-pointer ${
+                        isSelectedCat
+                          ? `${cStyle.badgeBg} ring-2 ring-offset-1 ring-gray-300`
+                          : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+                      }`}
+                    >
+                      <span>{cStyle.icon}</span>
+                      <span>{cStyle.label}</span>
+                    </button>
+                  );
+                })}
 
-                      return (
-                        <div
-                          key={p.id}
-                          onClick={() => handleSelectPin(p)}
-                          className={`p-4 pb-3 rounded-xl border transition-all flex items-start justify-between gap-4 cursor-pointer relative ${
-                            isSelected
-                              ? `${cStyle.cardBorder} ${cStyle.cardSelectedBg} ring-2 ring-offset-1 ring-gray-200 shadow-xs`
-                              : `${cStyle.cardBorder} ${cStyle.cardHoverBorder} bg-white shadow-xs`
-                          }`}
-                        >
-                          <div className="flex items-start gap-3 flex-1 min-w-0">
-                            <span
-                              className={`flex items-center justify-center w-6 h-6 rounded-full border text-xs font-bold shrink-0 mt-0.5 ${cStyle.badgeBg}`}
-                            >
-                              {index + 1}
-                            </span>
-                            <div className="flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
-                              <div className="flex items-center gap-2 flex-wrap relative">
-                                <h3
-                                  onClick={() => handleSelectPin(p)}
-                                  className="font-semibold text-gray-900 text-base cursor-pointer truncate"
+                <button
+                  type="button"
+                  onClick={() => setOnlyMustVisitFilter((prev) => !prev)}
+                  title="꼭 가고 싶은 곳만 보기"
+                  className={`px-2.5 py-1 rounded-full border text-xs font-semibold inline-flex items-center justify-center transition-all cursor-pointer ${
+                    onlyMustVisitFilter
+                      ? "bg-amber-100 text-amber-800 border-amber-300 ring-2 ring-offset-1 ring-amber-300"
+                      : "bg-white text-gray-600 border-gray-200 hover:bg-amber-50/60"
+                  }`}
+                >
+                  ⭐
+                </button>
+              </div>
+
+              {filteredPlaces.length === 0 ? (
+                <div className="text-gray-400 text-sm border-2 border-dashed border-gray-200 rounded-xl p-10 text-center bg-gray-50/50">
+                  {visiblePlaces.length === 0
+                    ? "아직 추가된 장소가 없습니다. 검색으로 장소를 추가해 보세요! 🗺️"
+                    : "선택한 필터 조건에 해당하는 장소가 없습니다."}
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {filteredPlaces.map((p, index) => {
+                    const isSelected = p.id === selectedPlaceId;
+                    const isEditingCategory = editingCategoryPlaceId === p.id;
+                    const cat = getPlaceCategory(p);
+                    const cStyle = CATEGORY_STYLES[cat];
+
+                    return (
+                      <div
+                        key={p.id}
+                        onClick={() => handleSelectPin(p)}
+                        className={`p-4 pb-3 rounded-xl border transition-all flex items-start justify-between gap-4 cursor-pointer relative ${
+                          isSelected
+                            ? `${cStyle.cardBorder} ${cStyle.cardSelectedBg} ring-2 ring-offset-1 ring-gray-200 shadow-xs`
+                            : `${cStyle.cardBorder} ${cStyle.cardHoverBorder} bg-white shadow-xs`
+                        }`}
+                      >
+                        <div className="flex items-start gap-3 flex-1 min-w-0">
+                          <span
+                            className={`flex items-center justify-center w-6 h-6 rounded-full border text-xs font-bold shrink-0 mt-0.5 ${cStyle.badgeBg}`}
+                          >
+                            {index + 1}
+                          </span>
+                          <div className="flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center gap-2 flex-wrap relative">
+                              <h3
+                                onClick={() => handleSelectPin(p)}
+                                className="font-semibold text-gray-900 text-base cursor-pointer truncate"
+                              >
+                                {p.title}
+                              </h3>
+
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingCategoryPlaceId((prev) => (prev === p.id ? null : p.id));
+                                }}
+                                title="카테고리 변경하기"
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-semibold shrink-0 transition-transform active:scale-95 cursor-pointer ${cStyle.badgeBg}`}
+                              >
+                                <span>{cStyle.icon}</span>
+                                <span>{cStyle.label}</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleTogglePlaceMustVisit(p.id);
+                                }}
+                                title={
+                                  p.isMustVisit
+                                    ? "꼭 가고 싶은 곳 해제"
+                                    : "꼭 가고 싶은 곳으로 표시"
+                                }
+                                className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded-full border text-[11px] transition-transform active:scale-95 cursor-pointer shrink-0 ${
+                                  p.isMustVisit
+                                    ? "bg-amber-100 text-amber-800 border-amber-300"
+                                    : "bg-gray-50 text-gray-400 border-gray-200 hover:text-amber-500 hover:border-amber-200"
+                                }`}
+                              >
+                                {p.isMustVisit ? "⭐" : "☆"}
+                              </button>
+
+                              {isEditingCategory && (
+                                <div
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="absolute left-0 top-7 z-30 bg-white border border-gray-200 rounded-xl shadow-lg p-1.5 flex items-center gap-1"
                                 >
-                                  {p.title}
-                                </h3>
+                                  {CATEGORY_ORDER.map((catKey) => {
+                                    const optionStyle = CATEGORY_STYLES[catKey];
+                                    const isCurrent = cat === catKey;
+                                    return (
+                                      <button
+                                        key={catKey}
+                                        type="button"
+                                        onClick={() => handleChangePlaceCategory(p.id, catKey)}
+                                        className={`px-2 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer ${
+                                          isCurrent
+                                            ? `${optionStyle.badgeBg} ring-1 ring-gray-400`
+                                            : "hover:bg-gray-100 text-gray-700"
+                                        }`}
+                                      >
+                                        <span>{optionStyle.icon}</span>
+                                        <span>{optionStyle.label}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
 
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setEditingCategoryPlaceId((prev) => (prev === p.id ? null : p.id));
-                                  }}
-                                  title="카테고리 변경하기"
-                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-semibold shrink-0 transition-transform active:scale-95 cursor-pointer ${cStyle.badgeBg}`}
-                                >
-                                  <span>{cStyle.icon}</span>
-                                  <span>{cStyle.label}</span>
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleTogglePlaceMustVisit(p.id);
-                                  }}
-                                  title={
-                                    p.isMustVisit
-                                      ? "꼭 가고 싶은 곳 해제"
-                                      : "꼭 가고 싶은 곳으로 표시"
-                                  }
-                                  className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded-full border text-[11px] transition-transform active:scale-95 cursor-pointer shrink-0 ${
-                                    p.isMustVisit
-                                      ? "bg-amber-100 text-amber-800 border-amber-300"
-                                      : "bg-gray-50 text-gray-400 border-gray-200 hover:text-amber-500 hover:border-amber-200"
-                                  }`}
-                                >
-                                  {p.isMustVisit ? "⭐" : "☆"}
-                                </button>
-
-                                {isEditingCategory && (
-                                  <div
-                                    onClick={(e) => e.stopPropagation()}
-                                    className="absolute left-0 top-7 z-30 bg-white border border-gray-200 rounded-xl shadow-lg p-1.5 flex items-center gap-1"
-                                  >
-                                    {CATEGORY_ORDER.map((catKey) => {
-                                      const optionStyle = CATEGORY_STYLES[catKey];
-                                      const isCurrent = cat === catKey;
-                                      return (
-                                        <button
-                                          key={catKey}
-                                          type="button"
-                                          onClick={() => handleChangePlaceCategory(p.id, catKey)}
-                                          className={`px-2 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer ${
-                                            isCurrent
-                                              ? `${optionStyle.badgeBg} ring-1 ring-gray-400`
-                                              : "hover:bg-gray-100 text-gray-700"
-                                          }`}
-                                        >
-                                          <span>{optionStyle.icon}</span>
-                                          <span>{optionStyle.label}</span>
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                              </div>
-
-                              <input
-                                type="text"
-                                value={p.memo}
-                                onChange={(e) => handleUpdateMemo(p.id, e.target.value)}
-                                placeholder="멘트를 입력해 보세요..."
-                                className="w-full text-xs text-gray-600 mt-1.5 px-2 py-1 rounded border border-transparent hover:border-gray-200 focus:border-emerald-400 focus:bg-emerald-50/30 outline-none transition-colors"
-                              />
-                              <div className="mt-2 pt-1.5 border-t border-gray-100 flex items-center justify-between gap-2 px-2">
-                                <a
-                                  href={buildNaverMapCoordUrl(p.title, p.lat, p.lng)}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 hover:text-emerald-900 underline underline-offset-2"
-                                >
-                                  네이버 지도 링크 ↗
-                                </a>
-                                <span className="text-[10px] tracking-tight text-gray-400/90 select-none">
-                                  {p.createdBy || "익명"}
-                                </span>
-                              </div>
+                            <input
+                              type="text"
+                              value={p.memo}
+                              onChange={(e) => handleUpdateMemo(p.id, e.target.value)}
+                              placeholder="멘트를 입력해 보세요..."
+                              className="w-full text-xs text-gray-600 mt-1.5 px-2 py-1 rounded border border-transparent hover:border-gray-200 focus:border-emerald-400 focus:bg-emerald-50/30 outline-none transition-colors"
+                            />
+                            <div className="mt-2 pt-1.5 border-t border-gray-100 flex items-center justify-between gap-2 px-2">
+                              <a
+                                href={buildNaverMapCoordUrl(p.title, p.lat, p.lng)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 hover:text-emerald-900 underline underline-offset-2"
+                              >
+                                네이버 지도 링크 ↗
+                              </a>
+                              <span className="text-[10px] tracking-tight text-gray-400/90 select-none">
+                                {p.createdBy || "익명"}
+                              </span>
                             </div>
                           </div>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeletePlace(p.id);
-                            }}
-                            className="text-gray-400 hover:text-red-500 text-sm px-2 py-1 rounded transition-colors cursor-pointer shrink-0"
-                            title="삭제"
-                          >
-                            삭제
-                          </button>
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </section>
-          )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeletePlace(p.id);
+                          }}
+                          className="text-gray-400 hover:text-red-500 text-sm px-2 py-1 rounded transition-colors cursor-pointer shrink-0"
+                          title="삭제"
+                        >
+                          삭제
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </section>
         </main>
       ) : (
         <main className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden bg-gray-50/60">
